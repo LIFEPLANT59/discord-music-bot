@@ -55,8 +55,9 @@ const trackRequesters = new Map();
 const playerMessages = new Map();
 const searchResults = new Map();
 const pausedStates = new Map();
+const progressIntervals = new Map(); // guildId -> intervalId
 
-// Обновленная функция логирования с выводом ответа бота
+// Функция логирования
 async function logAction(guild, action, user, details = '', responseText = '') {
   try {
     const logChannel = guild.channels.cache.find(c => c.name === LOG_CHANNEL_NAME && c.isTextBased());
@@ -71,13 +72,8 @@ async function logAction(guild, action, user, details = '', responseText = '') {
       )
       .setTimestamp();
 
-    if (details) {
-      embed.addFields({ name: 'Детали', value: details, inline: false });
-    }
-
-    if (responseText) {
-      embed.addFields({ name: 'Ответ бота', value: `\`\`\`${responseText}\`\`\``, inline: false });
-    }
+    if (details) embed.addFields({ name: 'Детали', value: details, inline: false });
+    if (responseText) embed.addFields({ name: 'Ответ бота', value: `\`\`\`${responseText}\`\`\``, inline: false });
 
     await logChannel.send({ embeds: [embed] }).catch(() => {});
   } catch (e) {
@@ -94,6 +90,7 @@ function formatDuration(duration) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+// Создание Embed с живым прогресс-баром
 function createTrackEmbed(track, requesterId, player) {
   const embed = new EmbedBuilder()
     .setTitle('🎶 Сейчас играет')
@@ -105,12 +102,46 @@ function createTrackEmbed(track, requesterId, player) {
     .setColor(0x5865F2)
     .setFooter({ text: 'Дух Музыки 🕊' });
 
+  // Живой прогресс-бар (обновляется в реальном времени)
   try {
-    const bar = player.getProgressBar?.({ size: 20 });
+    const bar = player.getProgressBar?.({ size: 20, timeFormat: 'compact' });
     if (bar) embed.addFields({ name: 'Прогресс', value: bar, inline: false });
   } catch (e) {}
 
   return embed;
+}
+
+// Запуск обновления прогресс-бара для сервера
+function startProgressUpdater(guildId, player) {
+  // Останавливаем старый интервал, если есть
+  stopProgressUpdater(guildId);
+
+  const interval = setInterval(async () => {
+    const track = currentTracks.get(guildId);
+    const msg = playerMessages.get(guildId);
+    if (!track || !msg || !player) {
+      stopProgressUpdater(guildId);
+      return;
+    }
+
+    try {
+      // Обновляем только поле прогресса, не трогая кнопки
+      const embed = createTrackEmbed(track, trackRequesters.get(guildId), player);
+      await msg.edit({ embeds: [embed] }).catch(() => {});
+    } catch (e) {
+      // Игнорируем ошибки редактирования (например, сообщение удалено)
+    }
+  }, 5000); // Обновление каждые 5 секунд (безопасно для Discord API)
+
+  progressIntervals.set(guildId, interval);
+}
+
+function stopProgressUpdater(guildId) {
+  const interval = progressIntervals.get(guildId);
+  if (interval) {
+    clearInterval(interval);
+    progressIntervals.delete(guildId);
+  }
 }
 
 manager.on('trackStart', async (player, track) => {
@@ -132,6 +163,9 @@ manager.on('trackStart', async (player, track) => {
   } else {
     await sendNewControlMessage(guildId, player, embed, controlComponents);
   }
+
+  // Запускаем живое обновление прогресс-бара
+  startProgressUpdater(guildId, player);
 });
 
 async function sendNewControlMessage(guildId, player, embed, components) {
@@ -144,6 +178,18 @@ async function sendNewControlMessage(guildId, player, embed, components) {
     console.error('Не удалось отправить сообщение:', e);
   }
 }
+
+manager.on('trackEnd', (player, track) => {
+  console.log(`[END] ${track.title || track.url}`);
+  // Останавливаем обновление, если трек закончился и очередь пуста
+  if (player.queue && player.queue.length === 0) {
+    stopProgressUpdater(player.guildId);
+  }
+});
+
+manager.on('playerError', (player, error) => {
+  console.error('[PLAYER ERROR]', error?.message || error);
+});
 
 const commands = [
   new SlashCommandBuilder().setName('info').setDescription('Информация о текущем треке').toJSON(),
@@ -198,6 +244,7 @@ function createControlComponents(player, track, guildId) {
 
   const components = [row1, row2];
 
+  // Меню перемотки (как альтернатива ползунку)
   if (track && track.duration) {
     const totalSeconds = Math.floor(track.duration / (track.duration > 10000 ? 1000 : 1));
     const step = 30;
@@ -370,6 +417,7 @@ client.on('interactionCreate', async (interaction) => {
           players.delete(guildId); currentTracks.delete(guildId);
           trackRequesters.delete(guildId); playerMessages.delete(guildId);
           searchResults.delete(guildId); pausedStates.delete(guildId);
+          stopProgressUpdater(guildId);
           logAction(interaction.guild, 'Полная остановка (кнопка)', interaction.user, '', 'Бот остановлен и покинул канал.');
           await interaction.editReply({ content: '⏹ Остановлено.', components: [], embeds: [] }).catch(() => {});
           return;
@@ -413,6 +461,21 @@ client.on('messageCreate', async (msg) => {
 
   let player = players.get(msg.guildId);
 
+  // === НОВАЯ КОМАНДА: !seek <секунды> ===
+  if (msg.content.startsWith('!seek ')) {
+    if (!player) return msg.reply('Ничего не играет.');
+    if (!canControl(msg)) return msg.reply('⛔ Только автор трека или админ.');
+    const seconds = parseInt(msg.content.slice(6).trim());
+    if (isNaN(seconds) || seconds < 0) return msg.reply('Укажи положительное число секунд.');
+    try {
+      await player.seek(seconds * 1000);
+      logAction(msg.guild, 'Ручная перемотка (!seek)', msg.author, `На ${seconds} сек.`, 'Позиция изменена.');
+      return msg.reply(`⏩ Перемотано на **${seconds}** секунд.`);
+    } catch (e) {
+      return msg.reply('❌ Ошибка перемотки.');
+    }
+  }
+
   if (msg.content === '!ping') {
     logAction(msg.guild, 'Проверка пинга', msg.author, '', `Pong! ${client.ws.ping}ms`);
     return msg.reply(`Pong! ${client.ws.ping}ms`);
@@ -425,6 +488,7 @@ client.on('messageCreate', async (msg) => {
     players.delete(msg.guildId); currentTracks.delete(msg.guildId);
     trackRequesters.delete(msg.guildId); playerMessages.delete(msg.guildId);
     searchResults.delete(msg.guildId); pausedStates.delete(msg.guildId);
+    stopProgressUpdater(msg.guildId);
     logAction(msg.guild, 'Команда !stop', msg.author, '', 'Музыка остановлена, очередь очищена.');
     return msg.reply('⏹ Остановлено.');
   }
@@ -454,7 +518,6 @@ client.on('messageCreate', async (msg) => {
         if (!player.connection) await player.connect(voiceChannel);
         await player.play(query, msg.author.id);
         trackRequesters.set(msg.guildId, msg.author.id);
-        
         logAction(msg.guild, 'Запуск по прямой ссылке', msg.author, `Ссылка: ${query}`, 'Бот начал воспроизведение.');
       } catch (e) {
         console.error(e);
