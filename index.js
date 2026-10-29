@@ -93,7 +93,7 @@ function canControl(ctx) {
   return false;
 }
 
-// --- Панель кнопок (как было) ---
+// --- Панель кнопок ---
 function createControlRow(player) {
   const isPaused = player?.paused || false;
   return new ActionRowBuilder().addComponents(
@@ -125,41 +125,54 @@ function createSearchMenu(guildId, tracks) {
   return new ActionRowBuilder().addComponents(menu);
 }
 
-// --- Обработка слэш-команд и кнопок ---
+// --- Обработка слэш-команд и взаимодействий ---
 client.on('interactionCreate', async (interaction) => {
-  // === Меню выбора трека ===
+  
+  // === 1. Меню выбора трека ===
   if (interaction.isStringSelectMenu()) {
     const guildId = interaction.guildId;
     if (interaction.customId !== `select_track_${guildId}`) return;
 
+    // СРАЗУ подтверждаем клик, чтобы Discord не выдал "Unknown interaction" через 3 секунды
+    await interaction.deferUpdate();
+
     const player = players.get(guildId);
     const tracks = searchResults.get(guildId);
-    if (!tracks) return interaction.reply({ content: 'Результаты поиска устарели.', ephemeral: true });
+    
+    if (!tracks) {
+      return interaction.followUp({ content: 'Результаты поиска устарели.', ephemeral: true }).catch(() => {});
+    }
 
     const index = parseInt(interaction.values[0]);
     const selectedTrack = tracks[index];
-    if (!selectedTrack) return interaction.reply({ content: 'Трек не найден.', ephemeral: true });
+    
+    if (!selectedTrack) {
+      return interaction.followUp({ content: 'Трек не найден.', ephemeral: true }).catch(() => {});
+    }
 
     try {
-      if (!player) return interaction.reply({ content: 'Бот не в голосовом канале.', ephemeral: true });
+      if (!player) {
+        return interaction.followUp({ content: 'Бот не в голосовом канале.', ephemeral: true }).catch(() => {});
+      }
+      
       await player.play(selectedTrack.url, interaction.user.id);
       trackRequesters.set(guildId, interaction.user.id);
       searchResults.delete(guildId);
 
       // Обновляем сообщение с выбором на панель управления
-      await interaction.update({
+      await interaction.editReply({
         content: `▶️ **${selectedTrack.title}**`,
         components: [createControlRow(player)],
       });
       playerMessages.set(guildId, interaction.message);
     } catch (e) {
       console.error('Select error:', e);
-      await interaction.reply({ content: 'Ошибка при запуске трека.', ephemeral: true });
+      await interaction.followUp({ content: 'Ошибка при запуске трека.', ephemeral: true }).catch(() => {});
     }
     return;
   }
 
-  // === Слэш-команды ===
+  // === 2. Слэш-команды ===
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === 'info') {
       const player = players.get(interaction.guildId);
@@ -219,25 +232,25 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  // === Кнопки управления ===
+  // === 3. Кнопки управления ===
   if (interaction.isButton()) {
     const player = players.get(interaction.guildId);
     if (!player) return interaction.reply({ content: 'Бот ничего не играет.', ephemeral: true });
     if (!canControl(interaction)) return interaction.reply({ content: '⛔ Только автор трека или админ.', ephemeral: true });
 
+    // Подтверждаем нажатие кнопки, чтобы не было зависаний
+    await interaction.deferUpdate().catch(() => {});
+
     try {
       switch (interaction.customId) {
         case 'ctrl_toggle':
           if (player.paused) player.resume(); else player.pause();
-          await interaction.update({ components: [createControlRow(player)] });
           break;
         case 'ctrl_next':
           player.skip();
-          await interaction.update({ components: [createControlRow(player)] });
           break;
         case 'ctrl_prev':
           player.previous();
-          await interaction.update({ components: [createControlRow(player)] });
           break;
         case 'ctrl_stop':
           player.stop();
@@ -247,12 +260,14 @@ client.on('interactionCreate', async (interaction) => {
           trackRequesters.delete(interaction.guildId);
           playerMessages.delete(interaction.guildId);
           searchResults.delete(interaction.guildId);
-          await interaction.update({ content: '⏹ Остановлено.', components: [], embeds: [] });
-          break;
+          await interaction.editReply({ content: '⏹ Остановлено.', components: [], embeds: [] }).catch(() => {});
+          return;
       }
+      // Обновляем кнопки (например, меняем иконку паузы на плей)
+      await interaction.editReply({ components: [createControlRow(player)] }).catch(() => {});
     } catch (e) {
       console.error('Button error:', e);
-      await interaction.reply({ content: 'Ошибка при выполнении.', ephemeral: true }).catch(() => {});
+      await interaction.followUp({ content: 'Ошибка при выполнении.', ephemeral: true }).catch(() => {});
     }
   }
 });
@@ -294,7 +309,7 @@ client.on('messageCreate', async (msg) => {
     const query = msg.content.slice(6).trim();
     if (!query) return msg.reply('Укажи название или ссылку.');
 
-    // Если это ссылка — запускаем сразу, без меню
+    // Прямая ссылка — запускаем сразу
     if (query.startsWith('http://') || query.startsWith('https://')) {
       try {
         if (!player) {
@@ -317,7 +332,7 @@ client.on('messageCreate', async (msg) => {
       return;
     }
 
-    // Если это текстовый запрос — ищем и показываем меню
+    // Текстовый запрос — ищем и показываем меню
     try {
       if (!player) {
         player = await manager.create(msg.guildId, { leaveOnEnd: true });
@@ -325,7 +340,6 @@ client.on('messageCreate', async (msg) => {
       }
       if (!player.connection) await player.connect(voiceChannel);
 
-      // Используем плагин YouTube для поиска (он умеет искать по тексту)
       const youtubePlugin = manager.plugins.find(p => p.name === 'youtube');
       if (!youtubePlugin) return msg.reply('Плагин для поиска не найден.');
 
@@ -336,7 +350,6 @@ client.on('messageCreate', async (msg) => {
 
       searchResults.set(msg.guildId, result.tracks);
 
-      // Формируем список для Embed
       const listText = result.tracks.slice(0, 10).map((t, i) => {
         const dur = t.duration ? ` \`Длина: ${Math.floor(t.duration / 60)}:${String(t.duration % 60).padStart(2, '0')}\`` : '';
         return `**${i + 1}:** ${t.title}${dur}`;
