@@ -13,7 +13,7 @@ bootstrap();
 const { setGlobalDispatcher, ProxyAgent } = require('undici');
 setGlobalDispatcher(new ProxyAgent(PROXY_URL));
 
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 const { PlayerManager } = require('ziplayer');
 const { YouTubePlugin, SoundCloudPlugin, SpotifyPlugin } = require('@ziplayer/plugin');
 const { InfinityPlugin } = require('@ziplayer/infinity');
@@ -52,16 +52,19 @@ manager.on('playerError', (player, error) => {
   console.error('[PLAYER ERROR]', error?.message || error);
 });
 
-// Регистрация слэш-команд (guild-команда — появляется сразу)
+// Регистрация guild-команд
 const commands = [
   new SlashCommandBuilder()
-    .setName('info')
-    .setDescription('Показать информацию о текущем треке')
+    .setName('help')
+    .setDescription('Рассказать о боте и показать список команд')
     .toJSON(),
 ];
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 (async () => {
   try {
+    // Очищаем глобальные команды (убираем дубли)
+    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: [] });
+    // Регистрируем guild-команду
     await rest.put(
       Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
       { body: commands }
@@ -85,18 +88,20 @@ function canControl(msg) {
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName === 'info') {
-    const player = players.get(interaction.guildId);
-    const track = currentTracks.get(interaction.guildId);
-    if (!player || !track) {
-      return interaction.reply('Сейчас ничего не играет.');
-    }
-    let progress = '';
-    try {
-      const bar = player.getProgressBar?.({ size: 20 });
-      if (bar) progress = `\n${bar}`;
-    } catch (e) {}
-    await interaction.reply(`🎵 **Сейчас играет:** ${track.title || track.url}${progress}`);
+  if (interaction.commandName === 'help') {
+    const embed = new EmbedBuilder()
+      .setTitle('🎵 Дух Музыки — помощь')
+      .setDescription('Музыкальный бот для вашего сервера. Включает треки с YouTube, SoundCloud и Spotify.')
+      .setColor(0x5865F2)
+      .addFields(
+        { name: '▶️ !play <название или ссылка>', value: 'Добавить трек в очередь. Поддерживаются YouTube, SoundCloud, Spotify.' },
+        { name: '⏭ !skip / !next', value: 'Пропустить текущий трек. Доступно автору трека или админу.' },
+        { name: '⏹ !stop', value: 'Остановить воспроизведение и очистить очередь. Доступно автору трека или админу.' },
+        { name: '🏓 !ping', value: 'Проверить, что бот жив, и узнать задержку.' },
+        { name: 'ℹ️ /help', value: 'Показать это сообщение.' },
+      )
+      .setFooter({ text: 'Дух Музыки 🕊' });
+    await interaction.reply({ embeds: [embed] });
   }
 });
 
