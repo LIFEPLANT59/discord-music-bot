@@ -13,7 +13,7 @@ bootstrap();
 const { setGlobalDispatcher, ProxyAgent } = require('undici');
 setGlobalDispatcher(new ProxyAgent(PROXY_URL));
 
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 const { PlayerManager } = require('ziplayer');
 const { YouTubePlugin, SoundCloudPlugin, SpotifyPlugin } = require('@ziplayer/plugin');
 const { InfinityPlugin } = require('@ziplayer/infinity');
@@ -37,8 +37,9 @@ const manager = new PlayerManager({
   ],
 });
 
-const players = new Map();
-const currentTracks = new Map();
+const players = new Map();          // guildId -> player
+const currentTracks = new Map();    // guildId -> track
+const trackRequesters = new Map();  // guildId -> userId (кто поставил текущий трек)
 
 manager.on('trackStart', (player, track) => {
   console.log(`[PLAY] ${track.title || track.url}`);
@@ -72,6 +73,14 @@ client.once('ready', () => {
   console.log(`Бот запущен как ${client.user.tag}`);
 });
 
+// Проверка: админ или автор трека
+function canControl(msg) {
+  const requesterId = trackRequesters.get(msg.guildId);
+  if (msg.member?.permissions?.has(PermissionFlagsBits.ManageGuild)) return true; // админ/модератор
+  if (requesterId && requesterId === msg.author.id) return true; // автор трека
+  return false;
+}
+
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName === 'info') {
@@ -97,17 +106,24 @@ client.on('messageCreate', async (msg) => {
 
   if (msg.content === '!stop') {
     if (!player) return msg.reply('Ничего не играет.');
+    if (!canControl(msg)) return msg.reply('⛔ Только автор трека или админ может остановить.');
     player.stop();
     player.destroy();
     players.delete(msg.guildId);
     currentTracks.delete(msg.guildId);
+    trackRequesters.delete(msg.guildId);
     return msg.reply('⏹ Остановлено.');
   }
 
   if (msg.content === '!skip' || msg.content === '!next') {
     if (!player) return msg.reply('Ничего не играет.');
-    try { player.skip(); return msg.reply('⏭ Пропущено.'); }
-    catch (e) { return msg.reply('Нечего пропускать.'); }
+    if (!canControl(msg)) return msg.reply('⛔ Только автор трека или админ может пропустить.');
+    try {
+      player.skip();
+      return msg.reply('⏭ Пропущено.');
+    } catch (e) {
+      return msg.reply('Нечего пропускать.');
+    }
   }
 
   if (msg.content.startsWith('!play ')) {
@@ -122,6 +138,7 @@ client.on('messageCreate', async (msg) => {
       }
       if (!player.connection) await player.connect(voiceChannel);
       await player.play(query, msg.author.id);
+      trackRequesters.set(msg.guildId, msg.author.id); // запоминаем, кто поставил
       msg.reply(`➕ Добавлено: **${query}**`);
     } catch (e) {
       console.error(e);
