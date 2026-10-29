@@ -7,13 +7,9 @@ process.env.GLOBAL_AGENT_HTTPS_PROXY = PROXY_URL;
 
 require('dotenv').config();
 
-// Защита от падения с EPIPE и логирование ошибок
-process.on('uncaughtException', (err) => {
-  console.error('Критическая ошибка:', err);
-});
-process.on('unhandledRejection', (reason) => {
-  console.error('Необработанный отказ:', reason);
-});
+// Защита от падений (EPIPE и т.д.)
+process.on('uncaughtException', (err) => console.error('Критическая ошибка:', err));
+process.on('unhandledRejection', (reason) => console.error('Необработанный отказ:', reason));
 
 const { bootstrap } = require('global-agent');
 bootstrap();
@@ -37,7 +33,6 @@ const client = new Client({
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers,
   ],
   rest: { agent: new ProxyAgent(PROXY_URL) },
 });
@@ -57,10 +52,7 @@ const trackRequesters = new Map();
 const playerMessages = new Map();
 const searchResults = new Map();
 
-// НАСТРОЙКИ
-const OWNER_ID = '986632907823153234';
-const ADMIN_ROLE_NAMES = ['HEAD MODERATOR', 'NUGZAR', 'MODERATOR'];
-
+// Вспомогательная функция для форматирования длительности
 function formatDuration(duration) {
   if (!duration) return 'Неизвестно';
   let sec = duration;
@@ -70,6 +62,7 @@ function formatDuration(duration) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+// Создание Embed с информацией о треке
 function createTrackEmbed(track, requesterId, player) {
   const embed = new EmbedBuilder()
     .setTitle('🎶 Сейчас играет')
@@ -89,6 +82,7 @@ function createTrackEmbed(track, requesterId, player) {
   return embed;
 }
 
+// Событие запуска трека
 manager.on('trackStart', async (player, track) => {
   console.log(`[PLAY] ${track.title || track.url}`);
   currentTracks.set(player.guildId, track);
@@ -124,7 +118,6 @@ async function sendNewControlMessage(guildId, player, embed, components) {
 manager.on('trackEnd', (player, track) => {
   console.log(`[END] ${track.title || track.url}`);
 });
-
 manager.on('playerError', (player, error) => {
   console.error('[PLAYER ERROR]', error?.message || error);
 });
@@ -153,25 +146,23 @@ client.once('clientReady', () => {
   console.log(`Бот запущен как ${client.user.tag}`);
 });
 
+// Проверка прав (автор трека или админ)
 function canControl(ctx) {
   const guildId = ctx.guildId;
   const userId = ctx.user ? ctx.user.id : ctx.author.id;
   const member = ctx.member;
-  
-  if (userId === OWNER_ID) return true;
+
+  // Если есть право "Управление сервером" (Админ)
   if (member?.permissions?.has(PermissionFlagsBits.ManageGuild)) return true;
 
-  if (member?.roles?.cache) {
-    const hasRole = member.roles.cache.some(role => ADMIN_ROLE_NAMES.includes(role.name.toUpperCase()));
-    if (hasRole) return true;
-  }
-
+  // Если это автор текущего трека
   const requesterId = trackRequesters.get(guildId);
   if (requesterId && requesterId === userId) return true;
 
   return false;
 }
 
+// Компоненты управления (кнопки и меню)
 function createControlComponents(player, track) {
   const isPaused = player?.paused || false;
 
@@ -216,6 +207,7 @@ function createControlComponents(player, track) {
   return components;
 }
 
+// Меню выбора трека
 function createSearchMenu(guildId, tracks) {
   const menu = new StringSelectMenuBuilder()
     .setCustomId(`select_track_${guildId}`)
@@ -234,6 +226,7 @@ function createSearchMenu(guildId, tracks) {
   return new ActionRowBuilder().addComponents(menu);
 }
 
+// Обработка взаимодействий
 client.on('interactionCreate', async (interaction) => {
   
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith('select_track_')) {
@@ -383,37 +376,8 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// Килл-свитч (потеря прав владельцем)
-client.on('guildMemberUpdate', async (oldMember, newMember) => {
-  if (newMember.id !== OWNER_ID) return;
-  
-  const wasAdmin = oldMember.permissions.has(PermissionFlagsBits.Administrator);
-  const isAdmin = newMember.permissions.has(PermissionFlagsBits.Administrator);
-
-  if (wasAdmin && !isAdmin) {
-    console.log('🚨 ВЛАДЕЛЕЦ ПОТЕРЯЛ ПРАВА АДМИНА. АКТИВАЦИЯ ПРОТОКОЛА САМОУНИЧТОЖЕНИЯ...');
-    
-    for (const [guildId, player] of players.entries()) {
-      try { player.stop(); player.destroy(); } catch (e) {}
-    }
-    
-    const channel = newMember.guild.channels.cache.find(c => c.name === 'general');
-    if (channel) await channel.send('⚠️ **ВНИМАНИЕ:** Владелец потерял права. Бот экстренно отключается.').catch(() => {});
-
-    await client.destroy();
-    process.exit(1);
-  }
-});
-
 // Текстовые команды
 client.on('messageCreate', async (msg) => {
-  if (msg.author.id === OWNER_ID && msg.content === '!panic') {
-    msg.reply('🚨 Активирован протокол самоуничтожения...').then(() => {
-       client.destroy();
-       process.exit(0);
-    });
-  }
-  
   if (msg.author.bot || !msg.guildId) return;
   let player = players.get(msg.guildId);
 
@@ -422,12 +386,9 @@ client.on('messageCreate', async (msg) => {
   if (msg.content === '!stop') {
     if (!player) return msg.reply('Ничего не играет.');
     if (!canControl(msg)) return msg.reply('⛔ Только автор трека или админ.');
-    player.stop();
-    player.destroy();
-    players.delete(msg.guildId);
-    currentTracks.delete(msg.guildId);
-    trackRequesters.delete(msg.guildId);
-    playerMessages.delete(msg.guildId);
+    player.stop(); player.destroy();
+    players.delete(msg.guildId); currentTracks.delete(msg.guildId);
+    trackRequesters.delete(msg.guildId); playerMessages.delete(msg.guildId);
     searchResults.delete(msg.guildId);
     return msg.reply('⏹ Остановлено.');
   }
