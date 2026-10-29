@@ -58,20 +58,13 @@ function formatDuration(duration) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-// Событие запуска трека: обновляем или создаем сообщение
-manager.on('trackStart', async (player, track) => {
-  console.log(`[PLAY] ${track.title || track.url}`);
-  currentTracks.set(player.guildId, track);
-
-  const guildId = player.guildId;
-  const requesterId = trackRequesters.get(guildId);
-  const requester = requesterId ? `<@${requesterId}>` : 'Неизвестно';
-
+// Функция для создания Embed с информацией о треке
+function createTrackEmbed(track, requesterId, player) {
   const embed = new EmbedBuilder()
     .setTitle('🎶 Сейчас играет')
     .setDescription(`**${track.title || 'Без названия'}**`)
     .addFields(
-      { name: 'Поставил', value: requester, inline: true },
+      { name: 'Поставил', value: requesterId ? `<@${requesterId}>` : 'Неизвестно', inline: true },
       { name: 'Длительность', value: formatDuration(track.duration), inline: true }
     )
     .setColor(0x5865F2)
@@ -82,19 +75,30 @@ manager.on('trackStart', async (player, track) => {
     if (bar) embed.addFields({ name: 'Прогресс', value: bar, inline: false });
   } catch (e) {}
 
+  return embed;
+}
+
+// Событие запуска трека
+manager.on('trackStart', async (player, track) => {
+  console.log(`[PLAY] ${track.title || track.url}`);
+  currentTracks.set(player.guildId, track);
+
+  const guildId = player.guildId;
+  const requesterId = trackRequesters.get(guildId);
+  const embed = createTrackEmbed(track, requesterId, player);
   const controlRow = createControlRow(player);
+
   const oldMessage = playerMessages.get(guildId);
 
   if (oldMessage) {
-    // Редактируем старое сообщение, чтобы не спамить
     try {
+      // Пытаемся обновить старое сообщение
       await oldMessage.edit({ embeds: [embed], components: [controlRow] });
     } catch (e) {
-      // Если старое сообщение удалили, отправляем новое
+      // Если сообщение удалили, отправляем новое в тот же канал
       await sendNewControlMessage(guildId, player, embed, controlRow);
     }
   } else {
-    // Отправляем новое, если его не было
     await sendNewControlMessage(guildId, player, embed, controlRow);
   }
 });
@@ -102,7 +106,10 @@ manager.on('trackStart', async (player, track) => {
 // Функция отправки нового сообщения с панелью
 async function sendNewControlMessage(guildId, player, embed, row) {
   const channel = player.userdata?.channel;
-  if (!channel) return;
+  if (!channel) {
+    console.log('Канал для отправки не найден!');
+    return;
+  }
   try {
     const msg = await channel.send({ embeds: [embed], components: [row] });
     playerMessages.set(guildId, msg);
@@ -217,8 +224,16 @@ client.on('interactionCreate', async (interaction) => {
       trackRequesters.set(guildId, interaction.user.id);
       searchResults.delete(guildId);
 
-      // Удаляем сообщение с меню, чтобы не мешало
-      await interaction.message.delete().catch(() => {});
+      // Превращаем сообщение с меню в панель управления
+      const embed = createTrackEmbed(selectedTrack, interaction.user.id, player);
+      const controlRow = createControlRow(player);
+
+      await interaction.editReply({
+        embeds: [embed],
+        components: [controlRow],
+      });
+
+      playerMessages.set(guildId, interaction.message);
       
     } catch (e) {
       console.error('Select error:', e);
@@ -325,6 +340,7 @@ client.on('interactionCreate', async (interaction) => {
           await interaction.editReply({ content: '⏹ Остановлено.', components: [], embeds: [] }).catch(() => {});
           return;
       }
+      // Обновляем кнопки (например, меняем иконку паузы на плей)
       await interaction.editReply({ components: [createControlRow(player)] }).catch(() => {});
     } catch (e) {
       console.error('Button error:', e);
@@ -380,7 +396,6 @@ client.on('messageCreate', async (msg) => {
         if (!player.connection) await player.connect(voiceChannel);
         await player.play(query, msg.author.id);
         trackRequesters.set(msg.guildId, msg.author.id);
-
       } catch (e) {
         console.error(e);
         msg.reply('❌ Не удалось найти трек.');
