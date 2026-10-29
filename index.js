@@ -45,24 +45,72 @@ const manager = new PlayerManager({
 const players = new Map();
 const currentTracks = new Map();
 const trackRequesters = new Map();
-const playerMessages = new Map();
+const playerMessages = new Map(); // guildId -> Message
 const searchResults = new Map();
 
 // Вспомогательная функция для форматирования длительности
 function formatDuration(duration) {
   if (!duration) return 'Неизвестно';
   let sec = duration;
-  // Если число слишком большое, скорее всего это миллисекунды
   if (sec > 10000) sec = Math.floor(sec / 1000);
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-manager.on('trackStart', (player, track) => {
+// Событие запуска трека: обновляем или создаем сообщение
+manager.on('trackStart', async (player, track) => {
   console.log(`[PLAY] ${track.title || track.url}`);
   currentTracks.set(player.guildId, track);
+
+  const guildId = player.guildId;
+  const requesterId = trackRequesters.get(guildId);
+  const requester = requesterId ? `<@${requesterId}>` : 'Неизвестно';
+
+  const embed = new EmbedBuilder()
+    .setTitle('🎶 Сейчас играет')
+    .setDescription(`**${track.title || 'Без названия'}**`)
+    .addFields(
+      { name: 'Поставил', value: requester, inline: true },
+      { name: 'Длительность', value: formatDuration(track.duration), inline: true }
+    )
+    .setColor(0x5865F2)
+    .setFooter({ text: 'Дух Музыки 🕊' });
+
+  try {
+    const bar = player.getProgressBar?.({ size: 20 });
+    if (bar) embed.addFields({ name: 'Прогресс', value: bar, inline: false });
+  } catch (e) {}
+
+  const controlRow = createControlRow(player);
+  const oldMessage = playerMessages.get(guildId);
+
+  if (oldMessage) {
+    // Редактируем старое сообщение, чтобы не спамить
+    try {
+      await oldMessage.edit({ embeds: [embed], components: [controlRow] });
+    } catch (e) {
+      // Если старое сообщение удалили, отправляем новое
+      await sendNewControlMessage(guildId, player, embed, controlRow);
+    }
+  } else {
+    // Отправляем новое, если его не было
+    await sendNewControlMessage(guildId, player, embed, controlRow);
+  }
 });
+
+// Функция отправки нового сообщения с панелью
+async function sendNewControlMessage(guildId, player, embed, row) {
+  const channel = player.userdata?.channel;
+  if (!channel) return;
+  try {
+    const msg = await channel.send({ embeds: [embed], components: [row] });
+    playerMessages.set(guildId, msg);
+  } catch (e) {
+    console.error('Не удалось отправить сообщение:', e);
+  }
+}
+
 manager.on('trackEnd', (player, track) => {
   console.log(`[END] ${track.title || track.url}`);
 });
@@ -104,13 +152,15 @@ function canControl(ctx) {
   return false;
 }
 
-// --- Панель кнопок ---
+// --- Панель кнопок (с перемоткой) ---
 function createControlRow(player) {
   const isPaused = player?.paused || false;
   return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('ctrl_rewind').setLabel('⏪ -10s').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('ctrl_prev').setLabel('⏮️').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('ctrl_toggle').setLabel(isPaused ? '▶️' : '⏸️').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('ctrl_next').setLabel('⏭️').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('ctrl_forward').setLabel('⏩ +10s').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('ctrl_stop').setLabel('⏹️').setStyle(ButtonStyle.Danger),
   );
 }
@@ -142,7 +192,7 @@ client.on('interactionCreate', async (interaction) => {
     const guildId = interaction.guildId;
     if (interaction.customId !== `select_track_${guildId}`) return;
 
-    await interaction.deferUpdate(); // Защита от таймаута в 3 секунды
+    await interaction.deferUpdate();
 
     const player = players.get(guildId);
     const tracks = searchResults.get(guildId);
@@ -167,11 +217,9 @@ client.on('interactionCreate', async (interaction) => {
       trackRequesters.set(guildId, interaction.user.id);
       searchResults.delete(guildId);
 
-      await interaction.editReply({
-        content: `▶️ **${selectedTrack.title}**`,
-        components: [createControlRow(player)],
-      });
-      playerMessages.set(guildId, interaction.message);
+      // Удаляем сообщение с меню, чтобы не мешало
+      await interaction.message.delete().catch(() => {});
+      
     } catch (e) {
       console.error('Select error:', e);
       await interaction.followUp({ content: 'Ошибка при запуске трека.', ephemeral: true }).catch(() => {});
@@ -248,6 +296,8 @@ client.on('interactionCreate', async (interaction) => {
     await interaction.deferUpdate().catch(() => {});
 
     try {
+      const currentTime = player.currentTime || 0; // Время в мс
+
       switch (interaction.customId) {
         case 'ctrl_toggle':
           if (player.paused) player.resume(); else player.pause();
@@ -257,6 +307,12 @@ client.on('interactionCreate', async (interaction) => {
           break;
         case 'ctrl_prev':
           player.previous();
+          break;
+        case 'ctrl_rewind':
+          await player.seek(Math.max(0, currentTime - 10000)); // -10 сек
+          break;
+        case 'ctrl_forward':
+          await player.seek(currentTime + 10000); // +10 сек
           break;
         case 'ctrl_stop':
           player.stop();
@@ -318,18 +374,13 @@ client.on('messageCreate', async (msg) => {
     if (query.startsWith('http://') || query.startsWith('https://')) {
       try {
         if (!player) {
-          player = await manager.create(msg.guildId, { leaveOnEnd: true });
+          player = await manager.create(msg.guildId, { leaveOnEnd: true, userdata: { channel: msg.channel } });
           players.set(msg.guildId, player);
         }
         if (!player.connection) await player.connect(voiceChannel);
         await player.play(query, msg.author.id);
         trackRequesters.set(msg.guildId, msg.author.id);
 
-        const controlMsg = await msg.reply({
-          content: `▶️ **${query}**`,
-          components: [createControlRow(player)],
-        });
-        playerMessages.set(msg.guildId, controlMsg);
       } catch (e) {
         console.error(e);
         msg.reply('❌ Не удалось найти трек.');
@@ -340,7 +391,7 @@ client.on('messageCreate', async (msg) => {
     // Текстовый запрос
     try {
       if (!player) {
-        player = await manager.create(msg.guildId, { leaveOnEnd: true });
+        player = await manager.create(msg.guildId, { leaveOnEnd: true, userdata: { channel: msg.channel } });
         players.set(msg.guildId, player);
       }
       if (!player.connection) await player.connect(voiceChannel);
