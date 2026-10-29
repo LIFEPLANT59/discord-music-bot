@@ -7,7 +7,6 @@ process.env.GLOBAL_AGENT_HTTPS_PROXY = PROXY_URL;
 
 require('dotenv').config();
 
-// Защита от падений (EPIPE и т.д.)
 process.on('uncaughtException', (err) => console.error('Критическая ошибка:', err));
 process.on('unhandledRejection', (reason) => console.error('Необработанный отказ:', reason));
 
@@ -52,7 +51,6 @@ const trackRequesters = new Map();
 const playerMessages = new Map();
 const searchResults = new Map();
 
-// Вспомогательная функция для форматирования длительности
 function formatDuration(duration) {
   if (!duration) return 'Неизвестно';
   let sec = duration;
@@ -62,7 +60,6 @@ function formatDuration(duration) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-// Создание Embed с информацией о треке
 function createTrackEmbed(track, requesterId, player) {
   const embed = new EmbedBuilder()
     .setTitle('🎶 Сейчас играет')
@@ -82,7 +79,6 @@ function createTrackEmbed(track, requesterId, player) {
   return embed;
 }
 
-// Событие запуска трека
 manager.on('trackStart', async (player, track) => {
   console.log(`[PLAY] ${track.title || track.url}`);
   currentTracks.set(player.guildId, track);
@@ -122,7 +118,6 @@ manager.on('playerError', (player, error) => {
   console.error('[PLAYER ERROR]', error?.message || error);
 });
 
-// Слэш-команды
 const commands = [
   new SlashCommandBuilder().setName('info').setDescription('Информация о текущем треке').toJSON(),
   new SlashCommandBuilder().setName('help').setDescription('Список всех команд бота').toJSON(),
@@ -146,25 +141,24 @@ client.once('clientReady', () => {
   console.log(`Бот запущен как ${client.user.tag}`);
 });
 
-// Проверка прав (автор трека или админ)
 function canControl(ctx) {
   const guildId = ctx.guildId;
   const userId = ctx.user ? ctx.user.id : ctx.author.id;
   const member = ctx.member;
 
-  // Если есть право "Управление сервером" (Админ)
   if (member?.permissions?.has(PermissionFlagsBits.ManageGuild)) return true;
 
-  // Если это автор текущего трека
   const requesterId = trackRequesters.get(guildId);
   if (requesterId && requesterId === userId) return true;
 
   return false;
 }
 
-// Компоненты управления (кнопки и меню)
 function createControlComponents(player, track) {
-  const isPaused = player?.paused || false;
+  // Проверяем состояние паузы максимально надёжно
+  const isPaused = player && typeof player.isPaused === 'function' 
+    ? player.isPaused() 
+    : (player?.paused || false);
 
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('ctrl_rewind').setLabel('⏪ -10s').setStyle(ButtonStyle.Secondary),
@@ -207,7 +201,6 @@ function createControlComponents(player, track) {
   return components;
 }
 
-// Меню выбора трека
 function createSearchMenu(guildId, tracks) {
   const menu = new StringSelectMenuBuilder()
     .setCustomId(`select_track_${guildId}`)
@@ -226,7 +219,6 @@ function createSearchMenu(guildId, tracks) {
   return new ActionRowBuilder().addComponents(menu);
 }
 
-// Обработка взаимодействий
 client.on('interactionCreate', async (interaction) => {
   
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith('select_track_')) {
@@ -354,8 +346,22 @@ client.on('interactionCreate', async (interaction) => {
         currentTime = player.getTime().current || 0;
       }
 
+      // Определяем текущее состояние паузы
+      let isPausedNow = false;
+      if (typeof player.isPaused === 'function') {
+        isPausedNow = player.isPaused();
+      } else {
+        isPausedNow = player.paused || false;
+      }
+
       switch (interaction.customId) {
-        case 'ctrl_toggle': if (player.paused) player.resume(); else player.pause(); break;
+        case 'ctrl_toggle': 
+          if (isPausedNow) {
+            player.resume();
+          } else {
+            player.pause();
+          }
+          break;
         case 'ctrl_next': player.skip(); break;
         case 'ctrl_prev': player.previous(); break;
         case 'ctrl_rewind': await player.seek(Math.max(0, currentTime - 10000)); break;
@@ -376,7 +382,6 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// Текстовые команды
 client.on('messageCreate', async (msg) => {
   if (msg.author.bot || !msg.guildId) return;
   let player = players.get(msg.guildId);
