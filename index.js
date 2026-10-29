@@ -425,35 +425,45 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.on('messageCreate', async (msg) => {
-  // Если пишет бот — игнорируем
   if (msg.author.bot || !msg.guildId) return;
   
+  // Вспомогательная функция для отправки предупреждений
+  // Сначала пробует ЛС. Если ЛС закрыты — пишет в канал и удаляет через 5 сек.
+  async function sendWarning(content) {
+    try {
+      await msg.author.send({ content });
+      logAction(msg.guild, 'Предупреждение в ЛС', msg.author, '', content);
+    } catch (e) {
+      // ЛС закрыты, отправляем в канал
+      const warningMsg = await msg.reply({ content }).catch(() => null);
+      if (warningMsg) {
+        setTimeout(() => { warningMsg.delete().catch(() => {}); }, 5000);
+      }
+      logAction(msg.guild, 'Предупреждение в канал (ЛС закрыты)', msg.author, '', content);
+    }
+  }
+
   // 1. ПРОВЕРКА ТЕКСТОВОГО КАНАЛА
   if (msg.channel.name !== REQUIRED_TEXT_CHANNEL_NAME) {
-    // Если это не команда (не начинается с !), просто игнорируем болтовню
     if (!msg.content.startsWith('!')) return;
 
-    // Если это команда не в том канале — отвечаем один раз приватно
     const requiredChannel = msg.guild.channels.cache.find(c => c.name === REQUIRED_TEXT_CHANNEL_NAME && c.isTextBased());
-    logAction(msg.guild, 'Неверный текстовый канал', msg.author, `Канал: <#${msg.channel.id}>`, 'Пользователю отправлен приватный ответ.');
-    return msg.reply({ 
-      content: `❌ Используйте канал ${requiredChannel ? `<#${requiredChannel.id}>` : '🎸→заказ-музыки'} для заказа музыки.`, 
-      ephemeral: true 
-    }).catch(() => {});
+    const channelMention = requiredChannel ? `<#${requiredChannel.id}>` : '🎸→заказ-музыки';
+    await sendWarning(`❌ Используйте канал ${channelMention} для заказа музыки.`);
+    return;
   }
 
   // 2. ПРОВЕРКА ГОЛОСОВОГО КАНАЛА
   const voiceChannel = msg.member?.voice?.channel;
   if (!voiceChannel) {
-    return msg.reply({ content: '❌ Сначала зайдите в голосовой канал 🎶→музыка.', ephemeral: true }).catch(() => {});
+    await sendWarning('❌ Сначала зайдите в голосовой канал 🎶→музыка.');
+    return;
   }
   if (voiceChannel.name !== REQUIRED_VOICE_CHANNEL_NAME) {
     const requiredChannel = msg.guild.channels.cache.find(c => c.name === REQUIRED_VOICE_CHANNEL_NAME && c.isVoice());
-    logAction(msg.guild, 'Неверный голосовой канал', msg.author, `Канал: ${voiceChannel.name}`, 'Пользователю отправлен приватный ответ.');
-    return msg.reply({ 
-      content: `❌ Перейдите в голосовой канал ${requiredChannel ? `<#${requiredChannel.id}>` : '🎶→музыка'} для прослушивания.`, 
-      ephemeral: true 
-    }).catch(() => {});
+    const channelMention = requiredChannel ? `<#${requiredChannel.id}>` : '🎶→музыка';
+    await sendWarning(`❌ Перейдите в голосовой канал ${channelMention} для прослушивания.`);
+    return;
   }
 
   let player = players.get(msg.guildId);
