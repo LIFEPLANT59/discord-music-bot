@@ -1,9 +1,10 @@
-cat > index.js << 'EOF'
-// === Прокси для ВСЕХ запросов (включая плагины YouTube/Spotify/SoundCloud) ===
-process.env.HTTP_PROXY = 'http://127.0.0.1:3067';
-process.env.HTTPS_PROXY = 'http://127.0.0.1:3067';
-process.env.GLOBAL_AGENT_HTTP_PROXY = 'http://127.0.0.1:3067';
-process.env.GLOBAL_AGENT_HTTPS_PROXY = 'http://127.0.0.1:3067';
+// === Прокси для Discord REST и WebSocket ===
+const PROXY_URL = 'http://127.0.0.1:3067';
+
+process.env.HTTP_PROXY = PROXY_URL;
+process.env.HTTPS_PROXY = PROXY_URL;
+process.env.GLOBAL_AGENT_HTTP_PROXY = PROXY_URL;
+process.env.GLOBAL_AGENT_HTTPS_PROXY = PROXY_URL;
 
 require('dotenv').config();
 
@@ -11,12 +12,12 @@ const { bootstrap } = require('global-agent');
 bootstrap();
 
 const { setGlobalDispatcher, ProxyAgent } = require('undici');
-const PROXY_URL = 'http://127.0.0.1:3067';
 setGlobalDispatcher(new ProxyAgent(PROXY_URL));
 
 const { Client, GatewayIntentBits } = require('discord.js');
 const { PlayerManager } = require('ziplayer');
-const { YouTubePlugin, SpotifyPlugin, SoundCloudPlugin } = require('@ziplayer/plugin');
+const { YouTubePlugin, SoundCloudPlugin, SpotifyPlugin } = require('@ziplayer/plugin');
+const { InfinityPlugin } = require('@ziplayer/infinity');
 
 const client = new Client({
   intents: [
@@ -30,25 +31,22 @@ const client = new Client({
   },
 });
 
-// Подключаем несколько источников: YouTube, SoundCloud, Spotify
 const manager = new PlayerManager({
   plugins: [
     new YouTubePlugin(),
     new SoundCloudPlugin(),
     new SpotifyPlugin(),
+    new InfinityPlugin(), // fallback: cobalt-инстансы для SoundCloud и других сайтов
   ],
 });
 
-// События плеера — чтобы в консоли было видно, что происходит
 manager.on('trackStart', (player, track) => {
   console.log(`[PLAY] ${track.title || track.url}`);
 });
-
 manager.on('trackEnd', (player, track) => {
   console.log(`[END] ${track.title || track.url}`);
 });
-
-manager.on('playerError', (player, error, track) => {
+manager.on('playerError', (player, error) => {
   console.error('[PLAYER ERROR]', error?.message || error);
 });
 
@@ -58,6 +56,10 @@ client.once('ready', () => {
 
 client.on('messageCreate', async (msg) => {
   if (msg.author.bot) return;
+
+  if (msg.content === '!ping') {
+    return msg.reply(`Pong! Задержка: ${client.ws.ping}ms`);
+  }
 
   if (msg.content.startsWith('!play ') && msg.member?.voice?.channel) {
     const query = msg.content.slice(6).trim();
@@ -73,12 +75,6 @@ client.on('messageCreate', async (msg) => {
       msg.reply('❌ Не удалось найти или воспроизвести трек.');
     }
   }
-
-  // Простая команда для проверки, что бот жив
-  if (msg.content === '!ping') {
-    msg.reply(`Pong! Задержка: ${client.ws.ping}ms`);
-  }
 });
 
 client.login(process.env.DISCORD_TOKEN);
-EOF
