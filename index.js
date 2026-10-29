@@ -55,9 +55,8 @@ const trackRequesters = new Map();
 const playerMessages = new Map();
 const searchResults = new Map();
 const pausedStates = new Map();
-const progressIntervals = new Map(); // guildId -> intervalId
+const progressIntervals = new Map();
 
-// Функция логирования
 async function logAction(guild, action, user, details = '', responseText = '') {
   try {
     const logChannel = guild.channels.cache.find(c => c.name === LOG_CHANNEL_NAME && c.isTextBased());
@@ -90,7 +89,6 @@ function formatDuration(duration) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-// Создание Embed с живым прогресс-баром
 function createTrackEmbed(track, requesterId, player) {
   const embed = new EmbedBuilder()
     .setTitle('🎶 Сейчас играет')
@@ -102,7 +100,6 @@ function createTrackEmbed(track, requesterId, player) {
     .setColor(0x5865F2)
     .setFooter({ text: 'Дух Музыки 🕊' });
 
-  // Живой прогресс-бар (обновляется в реальном времени)
   try {
     const bar = player.getProgressBar?.({ size: 20, timeFormat: 'compact' });
     if (bar) embed.addFields({ name: 'Прогресс', value: bar, inline: false });
@@ -111,9 +108,7 @@ function createTrackEmbed(track, requesterId, player) {
   return embed;
 }
 
-// Запуск обновления прогресс-бара для сервера
 function startProgressUpdater(guildId, player) {
-  // Останавливаем старый интервал, если есть
   stopProgressUpdater(guildId);
 
   const interval = setInterval(async () => {
@@ -125,13 +120,10 @@ function startProgressUpdater(guildId, player) {
     }
 
     try {
-      // Обновляем только поле прогресса, не трогая кнопки
       const embed = createTrackEmbed(track, trackRequesters.get(guildId), player);
       await msg.edit({ embeds: [embed] }).catch(() => {});
-    } catch (e) {
-      // Игнорируем ошибки редактирования (например, сообщение удалено)
-    }
-  }, 5000); // Обновление каждые 5 секунд (безопасно для Discord API)
+    } catch (e) {}
+  }, 5000);
 
   progressIntervals.set(guildId, interval);
 }
@@ -164,7 +156,6 @@ manager.on('trackStart', async (player, track) => {
     await sendNewControlMessage(guildId, player, embed, controlComponents);
   }
 
-  // Запускаем живое обновление прогресс-бара
   startProgressUpdater(guildId, player);
 });
 
@@ -181,7 +172,6 @@ async function sendNewControlMessage(guildId, player, embed, components) {
 
 manager.on('trackEnd', (player, track) => {
   console.log(`[END] ${track.title || track.url}`);
-  // Останавливаем обновление, если трек закончился и очередь пуста
   if (player.queue && player.queue.length === 0) {
     stopProgressUpdater(player.guildId);
   }
@@ -244,7 +234,6 @@ function createControlComponents(player, track, guildId) {
 
   const components = [row1, row2];
 
-  // Меню перемотки (как альтернатива ползунку)
   if (track && track.duration) {
     const totalSeconds = Math.floor(track.duration / (track.duration > 10000 ? 1000 : 1));
     const step = 30;
@@ -436,16 +425,24 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.on('messageCreate', async (msg) => {
+  // Если пишет бот — игнорируем
   if (msg.author.bot || !msg.guildId) return;
   
+  // 1. ПРОВЕРКА ТЕКСТОВОГО КАНАЛА
   if (msg.channel.name !== REQUIRED_TEXT_CHANNEL_NAME) {
+    // Если это не команда (не начинается с !), просто игнорируем болтовню
+    if (!msg.content.startsWith('!')) return;
+
+    // Если это команда не в том канале — отвечаем один раз приватно
+    const requiredChannel = msg.guild.channels.cache.find(c => c.name === REQUIRED_TEXT_CHANNEL_NAME && c.isTextBased());
     logAction(msg.guild, 'Неверный текстовый канал', msg.author, `Канал: <#${msg.channel.id}>`, 'Пользователю отправлен приватный ответ.');
     return msg.reply({ 
-      content: `❌ Используйте канал <#${msg.guild.channels.cache.find(c => c.name === REQUIRED_TEXT_CHANNEL_NAME)?.id || '🎸→заказ-музыки'}> для заказа музыки.`, 
+      content: `❌ Используйте канал ${requiredChannel ? `<#${requiredChannel.id}>` : '🎸→заказ-музыки'} для заказа музыки.`, 
       ephemeral: true 
     }).catch(() => {});
   }
 
+  // 2. ПРОВЕРКА ГОЛОСОВОГО КАНАЛА
   const voiceChannel = msg.member?.voice?.channel;
   if (!voiceChannel) {
     return msg.reply({ content: '❌ Сначала зайдите в голосовой канал 🎶→музыка.', ephemeral: true }).catch(() => {});
@@ -461,7 +458,7 @@ client.on('messageCreate', async (msg) => {
 
   let player = players.get(msg.guildId);
 
-  // === НОВАЯ КОМАНДА: !seek <секунды> ===
+  // === КОМАНДЫ ===
   if (msg.content.startsWith('!seek ')) {
     if (!player) return msg.reply('Ничего не играет.');
     if (!canControl(msg)) return msg.reply('⛔ Только автор трека или админ.');
