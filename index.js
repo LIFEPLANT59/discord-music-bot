@@ -36,9 +36,12 @@ const manager = new PlayerManager({
     new YouTubePlugin(),
     new SoundCloudPlugin(),
     new SpotifyPlugin(),
-    new InfinityPlugin(), // fallback: cobalt-инстансы для SoundCloud и других сайтов
+    new InfinityPlugin(),
   ],
 });
+
+// Хранилище плееров для каждого сервера
+const players = new Map();
 
 manager.on('trackStart', (player, track) => {
   console.log(`[PLAY] ${track.title || track.url}`);
@@ -55,24 +58,47 @@ client.once('ready', () => {
 });
 
 client.on('messageCreate', async (msg) => {
-  if (msg.author.bot) return;
+  if (msg.author.bot || !msg.guildId) return;
+
+  let player = players.get(msg.guildId);
 
   if (msg.content === '!ping') {
     return msg.reply(`Pong! Задержка: ${client.ws.ping}ms`);
   }
 
-  if (msg.content.startsWith('!play ') && msg.member?.voice?.channel) {
+  if (msg.content === '!stop') {
+    if (!player) return msg.reply('Бот ничего не играет.');
+    player.stop();
+    player.destroy();
+    players.delete(msg.guildId);
+    return msg.reply('⏹ Остановлено, очередь очищена.');
+  }
+
+  if (msg.content === '!skip' || msg.content === '!next') {
+    if (!player || !player.playing) return msg.reply('Нечего пропускать.');
+    player.skip();
+    return msg.reply('⏭ Трек пропущен.');
+  }
+
+  if (msg.content.startsWith('!play ')) {
+    const voiceChannel = msg.member?.voice?.channel;
+    if (!voiceChannel) return msg.reply('Сначала зайди в голосовой канал.');
+
     const query = msg.content.slice(6).trim();
-    if (!query) return msg.reply('Укажите название или ссылку.');
+    if (!query) return msg.reply('Укажи название или ссылку.');
 
     try {
-      const player = await manager.create(msg.guildId, { leaveOnEnd: true });
-      if (!player.connection) await player.connect(msg.member.voice.channel);
+      if (!player) {
+        player = await manager.create(msg.guildId, { leaveOnEnd: true });
+        players.set(msg.guildId, player);
+      }
+      if (!player.connection) await player.connect(voiceChannel);
+
       await player.play(query, msg.author.id);
-      msg.reply(`▶️ Ищу и включаю: **${query}**`);
+      msg.reply(`➕ Добавлено в очередь: **${query}**`);
     } catch (e) {
-      console.error('Ошибка воспроизведения:', e);
-      msg.reply('❌ Не удалось найти или воспроизвести трек.');
+      console.error('Ошибка:', e);
+      msg.reply('❌ Не удалось найти трек.');
     }
   }
 });
