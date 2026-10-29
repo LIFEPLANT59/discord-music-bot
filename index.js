@@ -1,3 +1,4 @@
+cat > index.js << 'EOF'
 // === Прокси для Discord REST и WebSocket ===
 const PROXY_URL = 'http://127.0.0.1:3067';
 
@@ -40,7 +41,6 @@ const manager = new PlayerManager({
   ],
 });
 
-// Хранилище плееров для каждого сервера
 const players = new Map();
 
 manager.on('trackStart', (player, track) => {
@@ -75,9 +75,13 @@ client.on('messageCreate', async (msg) => {
   }
 
   if (msg.content === '!skip' || msg.content === '!next') {
-    if (!player || !player.playing) return msg.reply('Нечего пропускать.');
-    player.skip();
-    return msg.reply('⏭ Трек пропущен.');
+    if (!player) return msg.reply('Бот ничего не играет.');
+    try {
+      player.skip();
+      return msg.reply('⏭ Трек пропущен.');
+    } catch (e) {
+      return msg.reply('Нечего пропускать.');
+    }
   }
 
   if (msg.content.startsWith('!play ')) {
@@ -104,3 +108,4 @@ client.on('messageCreate', async (msg) => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+EOF
