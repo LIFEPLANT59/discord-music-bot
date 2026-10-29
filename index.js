@@ -37,9 +37,9 @@ const manager = new PlayerManager({
   ],
 });
 
-const players = new Map();          // guildId -> player
-const currentTracks = new Map();    // guildId -> track
-const trackRequesters = new Map();  // guildId -> userId (кто поставил текущий трек)
+const players = new Map();
+const currentTracks = new Map();
+const trackRequesters = new Map();
 
 manager.on('trackStart', (player, track) => {
   console.log(`[PLAY] ${track.title || track.url}`);
@@ -52,7 +52,7 @@ manager.on('playerError', (player, error) => {
   console.error('[PLAYER ERROR]', error?.message || error);
 });
 
-// Регистрация слэш-команд
+// Регистрация слэш-команд (guild-команда — появляется сразу)
 const commands = [
   new SlashCommandBuilder()
     .setName('info')
@@ -62,7 +62,10 @@ const commands = [
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 (async () => {
   try {
-    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
+    await rest.put(
+      Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
+      { body: commands }
+    );
     console.log('Слэш-команды зарегистрированы.');
   } catch (e) {
     console.error('Ошибка регистрации:', e);
@@ -73,11 +76,10 @@ client.once('ready', () => {
   console.log(`Бот запущен как ${client.user.tag}`);
 });
 
-// Проверка: админ или автор трека
 function canControl(msg) {
   const requesterId = trackRequesters.get(msg.guildId);
-  if (msg.member?.permissions?.has(PermissionFlagsBits.ManageGuild)) return true; // админ/модератор
-  if (requesterId && requesterId === msg.author.id) return true; // автор трека
+  if (msg.member?.permissions?.has(PermissionFlagsBits.ManageGuild)) return true;
+  if (requesterId && requesterId === msg.author.id) return true;
   return false;
 }
 
@@ -138,7 +140,7 @@ client.on('messageCreate', async (msg) => {
       }
       if (!player.connection) await player.connect(voiceChannel);
       await player.play(query, msg.author.id);
-      trackRequesters.set(msg.guildId, msg.author.id); // запоминаем, кто поставил
+      trackRequesters.set(msg.guildId, msg.author.id);
       msg.reply(`➕ Добавлено: **${query}**`);
     } catch (e) {
       console.error(e);
