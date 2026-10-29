@@ -48,7 +48,7 @@ const trackRequesters = new Map();
 const playerMessages = new Map(); // guildId -> Message
 const searchResults = new Map();
 
-// Вспомогательная функция для форматирования длительности
+// Вспомогательная функция для форматирования длительности (в секундах)
 function formatDuration(duration) {
   if (!duration) return 'Неизвестно';
   let sec = duration;
@@ -86,18 +86,18 @@ manager.on('trackStart', async (player, track) => {
   const guildId = player.guildId;
   const requesterId = trackRequesters.get(guildId);
   const embed = createTrackEmbed(track, requesterId, player);
-  const controlRow = createControlRow(player); // Теперь возвращает массив [row1, row2]
+  const controlComponents = createControlComponents(player, track);
 
   const oldMessage = playerMessages.get(guildId);
 
   if (oldMessage) {
     try {
-      await oldMessage.edit({ embeds: [embed], components: controlRow });
+      await oldMessage.edit({ embeds: [embed], components: controlComponents });
     } catch (e) {
-      await sendNewControlMessage(guildId, player, embed, controlRow);
+      await sendNewControlMessage(guildId, player, embed, controlComponents);
     }
   } else {
-    await sendNewControlMessage(guildId, player, embed, controlRow);
+    await sendNewControlMessage(guildId, player, embed, controlComponents);
   }
 });
 
@@ -157,10 +157,11 @@ function canControl(ctx) {
   return false;
 }
 
-// --- Панель кнопок (разбита на два ряда) ---
-function createControlRow(player) {
+// --- Создание компонентов управления (кнопки + меню перемотки) ---
+function createControlComponents(player, track) {
   const isPaused = player?.paused || false;
 
+  // Ряд 1: кнопки управления
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('ctrl_rewind').setLabel('⏪ -10s').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('ctrl_prev').setLabel('⏮️').setStyle(ButtonStyle.Secondary),
@@ -169,11 +170,40 @@ function createControlRow(player) {
     new ButtonBuilder().setCustomId('ctrl_forward').setLabel('⏩ +10s').setStyle(ButtonStyle.Secondary),
   );
 
+  // Ряд 2: кнопка стоп
   const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('ctrl_stop').setLabel('⏹️ Остановить').setStyle(ButtonStyle.Danger),
   );
 
-  return [row1, row2];
+  const components = [row1, row2];
+
+  // Ряд 3: меню перемотки (если известна длительность)
+  if (track && track.duration) {
+    const totalSeconds = Math.floor(track.duration / (track.duration > 10000 ? 1000 : 1));
+    const step = 30; // Шаг 30 секунд
+    const options = [];
+    // Discord лимит: 25 опций
+    for (let i = 0; i < totalSeconds && options.length < 25; i += step) {
+      const m = Math.floor(i / 60);
+      const s = i % 60;
+      options.push(
+        new StringSelectMenuOptionBuilder()
+          .setLabel(`${m}:${String(s).padStart(2, '0')}`)
+          .setValue(String(i * 1000)) // значение в миллисекундах для seek
+      );
+    }
+    if (options.length > 0) {
+      const seekMenu = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId('seek_menu')
+          .setPlaceholder('Перемотать на...')
+          .addOptions(options)
+      );
+      components.push(seekMenu);
+    }
+  }
+
+  return components;
 }
 
 // --- Меню выбора трека ---
@@ -199,10 +229,8 @@ function createSearchMenu(guildId, tracks) {
 client.on('interactionCreate', async (interaction) => {
   
   // 1. Меню выбора трека
-  if (interaction.isStringSelectMenu()) {
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith('select_track_')) {
     const guildId = interaction.guildId;
-    if (interaction.customId !== `select_track_${guildId}`) return;
-
     await interaction.deferUpdate();
 
     const player = players.get(guildId);
@@ -229,11 +257,11 @@ client.on('interactionCreate', async (interaction) => {
       searchResults.delete(guildId);
 
       const embed = createTrackEmbed(selectedTrack, interaction.user.id, player);
-      const controlRow = createControlRow(player);
+      const controlComponents = createControlComponents(player, selectedTrack);
 
       await interaction.editReply({
         embeds: [embed],
-        components: controlRow,
+        components: controlComponents,
       });
 
       playerMessages.set(guildId, interaction.message);
@@ -245,7 +273,30 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  // 2. Слэш-команды
+  // 2. Меню перемотки
+  if (interaction.isStringSelectMenu() && interaction.customId === 'seek_menu') {
+    const player = players.get(interaction.guildId);
+    if (!player) return interaction.reply({ content: 'Ничего не играет.', ephemeral: true });
+
+    await interaction.deferUpdate();
+
+    const seekMs = parseInt(interaction.values[0]);
+    try {
+      await player.seek(seekMs);
+      // Обновляем сообщение, чтобы сбросить выбранное значение в меню
+      const track = currentTracks.get(interaction.guildId);
+      if (track) {
+        const embed = createTrackEmbed(track, trackRequesters.get(interaction.guildId), player);
+        await interaction.editReply({ embeds: [embed], components: createControlComponents(player, track) });
+      }
+    } catch (e) {
+      console.error('Seek error:', e);
+      await interaction.followUp({ content: 'Ошибка перемотки.', ephemeral: true }).catch(() => {});
+    }
+    return;
+  }
+
+  // 3. Слэш-команды
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === 'info') {
       const player = players.get(interaction.guildId);
@@ -305,7 +356,7 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  // 3. Кнопки управления
+  // 4. Кнопки управления
   if (interaction.isButton()) {
     const player = players.get(interaction.guildId);
     if (!player) return interaction.reply({ content: 'Бот ничего не играет.', ephemeral: true });
@@ -314,7 +365,14 @@ client.on('interactionCreate', async (interaction) => {
     await interaction.deferUpdate().catch(() => {});
 
     try {
-      const currentTime = player.currentTime || 0;
+      // ИСПОЛЬЗУЕМ ПРАВИЛЬНЫЙ МЕТОД ДЛЯ ПОЛУЧЕНИЯ ВРЕМЕНИ
+      let currentTime = 0;
+      if (typeof player.getTime === 'function') {
+        const timeInfo = player.getTime();
+        currentTime = timeInfo.current || 0; // getTime() возвращает объект с полем current
+      } else if (typeof player.currentTime === 'number') {
+        currentTime = player.currentTime;
+      }
 
       switch (interaction.customId) {
         case 'ctrl_toggle':
@@ -327,9 +385,11 @@ client.on('interactionCreate', async (interaction) => {
           player.previous();
           break;
         case 'ctrl_rewind':
+          // Перемотка на 10 секунд назад (не меньше 0)
           await player.seek(Math.max(0, currentTime - 10000));
           break;
         case 'ctrl_forward':
+          // Перемотка на 10 секунд вперед
           await player.seek(currentTime + 10000);
           break;
         case 'ctrl_stop':
@@ -343,8 +403,8 @@ client.on('interactionCreate', async (interaction) => {
           await interaction.editReply({ content: '⏹ Остановлено.', components: [], embeds: [] }).catch(() => {});
           return;
       }
-      // components: createControlRow(player) - передаем массив рядов напрямую
-      await interaction.editReply({ components: createControlRow(player) }).catch(() => {});
+      const track = currentTracks.get(interaction.guildId);
+      await interaction.editReply({ components: createControlComponents(player, track) }).catch(() => {});
     } catch (e) {
       console.error('Button error:', e);
       await interaction.followUp({ content: 'Ошибка при выполнении.', ephemeral: true }).catch(() => {});
