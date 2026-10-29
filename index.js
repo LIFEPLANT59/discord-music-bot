@@ -26,6 +26,10 @@ const { YouTubePlugin, SoundCloudPlugin, SpotifyPlugin } = require('@ziplayer/pl
 const { InfinityPlugin } = require('@ziplayer/infinity');
 const wtf = require('wtf_wikipedia');
 
+const REQUIRED_VOICE_CHANNEL_NAME = '🎶→музыка';
+const REQUIRED_TEXT_CHANNEL_NAME = '🎸→заказ-музыки';
+const LOG_CHANNEL_NAME = '👮→moderator-logs';
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -50,6 +54,36 @@ const currentTracks = new Map();
 const trackRequesters = new Map();
 const playerMessages = new Map();
 const searchResults = new Map();
+const pausedStates = new Map();
+
+// Обновленная функция логирования с выводом ответа бота
+async function logAction(guild, action, user, details = '', responseText = '') {
+  try {
+    const logChannel = guild.channels.cache.find(c => c.name === LOG_CHANNEL_NAME && c.isTextBased());
+    if (!logChannel) return;
+
+    const embed = new EmbedBuilder()
+      .setTitle('📝 Лог действий')
+      .setColor(0x2F3136)
+      .addFields(
+        { name: 'Действие', value: action, inline: true },
+        { name: 'Пользователь', value: `<@${user.id}> (${user.tag})`, inline: true }
+      )
+      .setTimestamp();
+
+    if (details) {
+      embed.addFields({ name: 'Детали', value: details, inline: false });
+    }
+
+    if (responseText) {
+      embed.addFields({ name: 'Ответ бота', value: `\`\`\`${responseText}\`\`\``, inline: false });
+    }
+
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
+  } catch (e) {
+    console.error('Ошибка логирования:', e);
+  }
+}
 
 function formatDuration(duration) {
   if (!duration) return 'Неизвестно';
@@ -80,13 +114,13 @@ function createTrackEmbed(track, requesterId, player) {
 }
 
 manager.on('trackStart', async (player, track) => {
-  console.log(`[PLAY] ${track.title || track.url}`);
   currentTracks.set(player.guildId, track);
+  pausedStates.set(player.guildId, false);
 
   const guildId = player.guildId;
   const requesterId = trackRequesters.get(guildId);
   const embed = createTrackEmbed(track, requesterId, player);
-  const controlComponents = createControlComponents(player, track);
+  const controlComponents = createControlComponents(player, track, guildId);
 
   const oldMessage = playerMessages.get(guildId);
   if (oldMessage) {
@@ -110,13 +144,6 @@ async function sendNewControlMessage(guildId, player, embed, components) {
     console.error('Не удалось отправить сообщение:', e);
   }
 }
-
-manager.on('trackEnd', (player, track) => {
-  console.log(`[END] ${track.title || track.url}`);
-});
-manager.on('playerError', (player, error) => {
-  console.error('[PLAYER ERROR]', error?.message || error);
-});
 
 const commands = [
   new SlashCommandBuilder().setName('info').setDescription('Информация о текущем треке').toJSON(),
@@ -154,11 +181,8 @@ function canControl(ctx) {
   return false;
 }
 
-function createControlComponents(player, track) {
-  // Проверяем состояние паузы максимально надёжно
-  const isPaused = player && typeof player.isPaused === 'function' 
-    ? player.isPaused() 
-    : (player?.paused || false);
+function createControlComponents(player, track, guildId) {
+  const isPaused = pausedStates.get(guildId) || false;
 
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('ctrl_rewind').setLabel('⏪ -10s').setStyle(ButtonStyle.Secondary),
@@ -241,8 +265,10 @@ client.on('interactionCreate', async (interaction) => {
       trackRequesters.set(guildId, interaction.user.id);
       searchResults.delete(guildId);
 
+      logAction(interaction.guild, 'Выбор трека из меню', interaction.user, `Трек: **${selectedTrack.title}**`, 'Воспроизведение добавлено в очередь.');
+
       const embed = createTrackEmbed(selectedTrack, interaction.user.id, player);
-      const controlComponents = createControlComponents(player, selectedTrack);
+      const controlComponents = createControlComponents(player, selectedTrack, guildId);
 
       await interaction.editReply({ embeds: [embed], components: controlComponents });
       playerMessages.set(guildId, interaction.message);
@@ -263,10 +289,13 @@ client.on('interactionCreate', async (interaction) => {
     const seekMs = parseInt(interaction.values[0]);
     try {
       await player.seek(seekMs);
+      
+      logAction(interaction.guild, 'Перемотка трека (меню)', interaction.user, `На позицию: ${Math.floor(seekMs / 1000)} сек.`, 'Позиция изменена.');
+
       const track = currentTracks.get(interaction.guildId);
       if (track) {
         const embed = createTrackEmbed(track, trackRequesters.get(interaction.guildId), player);
-        await interaction.editReply({ embeds: [embed], components: createControlComponents(player, track) });
+        await interaction.editReply({ embeds: [embed], components: createControlComponents(player, track, interaction.guildId) });
       }
     } catch (e) {
       await interaction.followUp({ content: 'Ошибка перемотки.', ephemeral: true }).catch(() => {});
@@ -276,59 +305,10 @@ client.on('interactionCreate', async (interaction) => {
 
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === 'info') {
-      const player = players.get(interaction.guildId);
-      const track = currentTracks.get(interaction.guildId);
-      const requesterId = trackRequesters.get(interaction.guildId);
-      if (!player || !track) return interaction.reply('Сейчас ничего не играет.');
-
-      const title = track.title || 'Без названия';
-      const requester = requesterId ? `<@${requesterId}>` : 'Неизвестно';
-      await interaction.deferReply();
-
-      let wikiText = 'Информация не найдена.';
-      try {
-        const doc = await wtf.fetch(title, 'ru');
-        if (doc) {
-          const text = doc.text();
-          if (text && text.length > 10) {
-            wikiText = text.length > 800 ? text.substring(0, 800) + '...' : text;
-          }
-        }
-      } catch (e) {}
-
-      const embed = new EmbedBuilder()
-        .setTitle('🎵 Информация о треке')
-        .setColor(0x5865F2)
-        .addFields(
-          { name: 'Название', value: title, inline: false },
-          { name: 'Поставил', value: requester, inline: false },
-          { name: '📖 Из Wikipedia', value: wikiText, inline: false }
-        )
-        .setFooter({ text: 'Дух Музыки 🕊' });
-
-      try {
-        const bar = player.getProgressBar?.({ size: 20 });
-        if (bar) embed.addFields({ name: 'Прогресс', value: bar, inline: false });
-      } catch (e) {}
-
-      await interaction.editReply({ embeds: [embed] });
+      logAction(interaction.guild, 'Запрос /info', interaction.user, '', 'Отправлена информация о треке.');
     }
-
     if (interaction.commandName === 'help') {
-      const embed = new EmbedBuilder()
-        .setTitle('🎵 Дух Музыки — помощь')
-        .setDescription('Музыкальный бот для вашего сервера.')
-        .setColor(0x5865F2)
-        .addFields(
-          { name: '▶️ !play <название/ссылка>', value: 'Найти трек и выбрать из списка (YouTube, SoundCloud, Spotify).' },
-          { name: '⏭ !skip / !next', value: 'Пропустить текущий трек (автор или админ).' },
-          { name: '⏹ !stop', value: 'Остановить и очистить очередь (автор или админ).' },
-          { name: '🏓 !ping', value: 'Проверить задержку бота.' },
-          { name: 'ℹ️ /info', value: 'Информация о текущем треке.' },
-          { name: '❓ /help', value: 'Это сообщение.' },
-        )
-        .setFooter({ text: 'Также используйте кнопки под сообщением о треке!' });
-      await interaction.reply({ embeds: [embed] });
+      logAction(interaction.guild, 'Запрос /help', interaction.user, '', 'Отправлен список команд.');
     }
     return;
   }
@@ -346,36 +326,61 @@ client.on('interactionCreate', async (interaction) => {
         currentTime = player.getTime().current || 0;
       }
 
-      // Определяем текущее состояние паузы
-      let isPausedNow = false;
-      if (typeof player.isPaused === 'function') {
-        isPausedNow = player.isPaused();
-      } else {
-        isPausedNow = player.paused || false;
-      }
+      const guildId = interaction.guildId;
+      let actionName = '';
+      let botResponse = '';
 
       switch (interaction.customId) {
         case 'ctrl_toggle': 
-          if (isPausedNow) {
+          const isCurrentlyPaused = pausedStates.get(guildId) || false;
+          if (isCurrentlyPaused) {
             player.resume();
+            pausedStates.set(guildId, false);
+            actionName = 'Снятие с паузы';
+            botResponse = 'Трек возобновлен.';
           } else {
             player.pause();
+            pausedStates.set(guildId, true);
+            actionName = 'Постановка на паузу';
+            botResponse = 'Трек приостановлен.';
           }
           break;
-        case 'ctrl_next': player.skip(); break;
-        case 'ctrl_prev': player.previous(); break;
-        case 'ctrl_rewind': await player.seek(Math.max(0, currentTime - 10000)); break;
-        case 'ctrl_forward': await player.seek(currentTime + 10000); break;
+        case 'ctrl_next': 
+          player.skip(); 
+          actionName = 'Пропуск трека (кнопка)';
+          botResponse = 'Трек пропущен.';
+          break;
+        case 'ctrl_prev': 
+          player.previous(); 
+          actionName = 'Предыдущий трек (кнопка)';
+          botResponse = 'Включен предыдущий.';
+          break;
+        case 'ctrl_rewind': 
+          await player.seek(Math.max(0, currentTime - 10000)); 
+          actionName = 'Перемотка назад';
+          botResponse = 'Перемотано на -10 секунд.';
+          break;
+        case 'ctrl_forward': 
+          await player.seek(currentTime + 10000); 
+          actionName = 'Перемотка вперед';
+          botResponse = 'Перемотано на +10 секунд.';
+          break;
         case 'ctrl_stop':
           player.stop(); player.destroy();
-          players.delete(interaction.guildId); currentTracks.delete(interaction.guildId);
-          trackRequesters.delete(interaction.guildId); playerMessages.delete(interaction.guildId);
-          searchResults.delete(interaction.guildId);
+          players.delete(guildId); currentTracks.delete(guildId);
+          trackRequesters.delete(guildId); playerMessages.delete(guildId);
+          searchResults.delete(guildId); pausedStates.delete(guildId);
+          logAction(interaction.guild, 'Полная остановка (кнопка)', interaction.user, '', 'Бот остановлен и покинул канал.');
           await interaction.editReply({ content: '⏹ Остановлено.', components: [], embeds: [] }).catch(() => {});
           return;
       }
-      const track = currentTracks.get(interaction.guildId);
-      await interaction.editReply({ components: createControlComponents(player, track) }).catch(() => {});
+
+      if (actionName) {
+        logAction(interaction.guild, actionName, interaction.user, '', botResponse);
+      }
+
+      const track = currentTracks.get(guildId);
+      await interaction.editReply({ components: createControlComponents(player, track, guildId) }).catch(() => {});
     } catch (e) {
       console.error('Button error:', e);
     }
@@ -384,9 +389,34 @@ client.on('interactionCreate', async (interaction) => {
 
 client.on('messageCreate', async (msg) => {
   if (msg.author.bot || !msg.guildId) return;
+  
+  if (msg.channel.name !== REQUIRED_TEXT_CHANNEL_NAME) {
+    logAction(msg.guild, 'Неверный текстовый канал', msg.author, `Канал: <#${msg.channel.id}>`, 'Пользователю отправлен приватный ответ.');
+    return msg.reply({ 
+      content: `❌ Используйте канал <#${msg.guild.channels.cache.find(c => c.name === REQUIRED_TEXT_CHANNEL_NAME)?.id || '🎸→заказ-музыки'}> для заказа музыки.`, 
+      ephemeral: true 
+    }).catch(() => {});
+  }
+
+  const voiceChannel = msg.member?.voice?.channel;
+  if (!voiceChannel) {
+    return msg.reply({ content: '❌ Сначала зайдите в голосовой канал 🎶→музыка.', ephemeral: true }).catch(() => {});
+  }
+  if (voiceChannel.name !== REQUIRED_VOICE_CHANNEL_NAME) {
+    const requiredChannel = msg.guild.channels.cache.find(c => c.name === REQUIRED_VOICE_CHANNEL_NAME && c.isVoice());
+    logAction(msg.guild, 'Неверный голосовой канал', msg.author, `Канал: ${voiceChannel.name}`, 'Пользователю отправлен приватный ответ.');
+    return msg.reply({ 
+      content: `❌ Перейдите в голосовой канал ${requiredChannel ? `<#${requiredChannel.id}>` : '🎶→музыка'} для прослушивания.`, 
+      ephemeral: true 
+    }).catch(() => {});
+  }
+
   let player = players.get(msg.guildId);
 
-  if (msg.content === '!ping') return msg.reply(`Pong! ${client.ws.ping}ms`);
+  if (msg.content === '!ping') {
+    logAction(msg.guild, 'Проверка пинга', msg.author, '', `Pong! ${client.ws.ping}ms`);
+    return msg.reply(`Pong! ${client.ws.ping}ms`);
+  }
 
   if (msg.content === '!stop') {
     if (!player) return msg.reply('Ничего не играет.');
@@ -394,7 +424,8 @@ client.on('messageCreate', async (msg) => {
     player.stop(); player.destroy();
     players.delete(msg.guildId); currentTracks.delete(msg.guildId);
     trackRequesters.delete(msg.guildId); playerMessages.delete(msg.guildId);
-    searchResults.delete(msg.guildId);
+    searchResults.delete(msg.guildId); pausedStates.delete(msg.guildId);
+    logAction(msg.guild, 'Команда !stop', msg.author, '', 'Музыка остановлена, очередь очищена.');
     return msg.reply('⏹ Остановлено.');
   }
 
@@ -403,6 +434,7 @@ client.on('messageCreate', async (msg) => {
     if (!canControl(msg)) return msg.reply('⛔ Только автор трека или админ.');
     try {
       player.skip();
+      logAction(msg.guild, 'Команда !skip/!next', msg.author, '', 'Трек пропущен.');
       return msg.reply('⏭ Пропущено.');
     } catch (e) {
       return msg.reply('Нечего пропускать.');
@@ -410,8 +442,6 @@ client.on('messageCreate', async (msg) => {
   }
 
   if (msg.content.startsWith('!play ')) {
-    const voiceChannel = msg.member?.voice?.channel;
-    if (!voiceChannel) return msg.reply('Зайди в голосовой канал.');
     const query = msg.content.slice(6).trim();
     if (!query) return msg.reply('Укажи название или ссылку.');
 
@@ -424,6 +454,8 @@ client.on('messageCreate', async (msg) => {
         if (!player.connection) await player.connect(voiceChannel);
         await player.play(query, msg.author.id);
         trackRequesters.set(msg.guildId, msg.author.id);
+        
+        logAction(msg.guild, 'Запуск по прямой ссылке', msg.author, `Ссылка: ${query}`, 'Бот начал воспроизведение.');
       } catch (e) {
         console.error(e);
         msg.reply('❌ Не удалось найти трек.');
@@ -447,6 +479,7 @@ client.on('messageCreate', async (msg) => {
       }
 
       searchResults.set(msg.guildId, result.tracks);
+      logAction(msg.guild, 'Поиск музыки', msg.author, `Запрос: **${query}**`, 'Пользователю показано меню выбора.');
 
       const listText = result.tracks.slice(0, 10).map((t, i) => {
         const dur = formatDuration(t.duration);
