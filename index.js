@@ -46,7 +46,18 @@ const players = new Map();
 const currentTracks = new Map();
 const trackRequesters = new Map();
 const playerMessages = new Map();
-const searchResults = new Map(); // guildId -> массив треков для выбора
+const searchResults = new Map();
+
+// Вспомогательная функция для форматирования длительности
+function formatDuration(duration) {
+  if (!duration) return 'Неизвестно';
+  let sec = duration;
+  // Если число слишком большое, скорее всего это миллисекунды
+  if (sec > 10000) sec = Math.floor(sec / 1000);
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
 
 manager.on('trackStart', (player, track) => {
   console.log(`[PLAY] ${track.title || track.url}`);
@@ -112,13 +123,11 @@ function createSearchMenu(guildId, tracks) {
 
   const options = tracks.slice(0, 25).map((track, index) => {
     const label = `${index + 1}. ${track.title || 'Без названия'}`;
-    const description = track.duration
-      ? `Длина: ${Math.floor(track.duration / 60)}:${String(track.duration % 60).padStart(2, '0')}`
-      : undefined;
+    const durationStr = formatDuration(track.duration);
     return new StringSelectMenuOptionBuilder()
       .setLabel(label.substring(0, 100))
       .setValue(String(index))
-      .setDescription(description ? description.substring(0, 100) : undefined);
+      .setDescription(`Длина: ${durationStr}`);
   });
 
   menu.addOptions(options);
@@ -128,13 +137,12 @@ function createSearchMenu(guildId, tracks) {
 // --- Обработка слэш-команд и взаимодействий ---
 client.on('interactionCreate', async (interaction) => {
   
-  // === 1. Меню выбора трека ===
+  // 1. Меню выбора трека
   if (interaction.isStringSelectMenu()) {
     const guildId = interaction.guildId;
     if (interaction.customId !== `select_track_${guildId}`) return;
 
-    // СРАЗУ подтверждаем клик, чтобы Discord не выдал "Unknown interaction" через 3 секунды
-    await interaction.deferUpdate();
+    await interaction.deferUpdate(); // Защита от таймаута в 3 секунды
 
     const player = players.get(guildId);
     const tracks = searchResults.get(guildId);
@@ -159,7 +167,6 @@ client.on('interactionCreate', async (interaction) => {
       trackRequesters.set(guildId, interaction.user.id);
       searchResults.delete(guildId);
 
-      // Обновляем сообщение с выбором на панель управления
       await interaction.editReply({
         content: `▶️ **${selectedTrack.title}**`,
         components: [createControlRow(player)],
@@ -172,7 +179,7 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  // === 2. Слэш-команды ===
+  // 2. Слэш-команды
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === 'info') {
       const player = players.get(interaction.guildId);
@@ -232,13 +239,12 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  // === 3. Кнопки управления ===
+  // 3. Кнопки управления
   if (interaction.isButton()) {
     const player = players.get(interaction.guildId);
     if (!player) return interaction.reply({ content: 'Бот ничего не играет.', ephemeral: true });
     if (!canControl(interaction)) return interaction.reply({ content: '⛔ Только автор трека или админ.', ephemeral: true });
 
-    // Подтверждаем нажатие кнопки, чтобы не было зависаний
     await interaction.deferUpdate().catch(() => {});
 
     try {
@@ -263,7 +269,6 @@ client.on('interactionCreate', async (interaction) => {
           await interaction.editReply({ content: '⏹ Остановлено.', components: [], embeds: [] }).catch(() => {});
           return;
       }
-      // Обновляем кнопки (например, меняем иконку паузы на плей)
       await interaction.editReply({ components: [createControlRow(player)] }).catch(() => {});
     } catch (e) {
       console.error('Button error:', e);
@@ -309,7 +314,7 @@ client.on('messageCreate', async (msg) => {
     const query = msg.content.slice(6).trim();
     if (!query) return msg.reply('Укажи название или ссылку.');
 
-    // Прямая ссылка — запускаем сразу
+    // Прямая ссылка
     if (query.startsWith('http://') || query.startsWith('https://')) {
       try {
         if (!player) {
@@ -332,7 +337,7 @@ client.on('messageCreate', async (msg) => {
       return;
     }
 
-    // Текстовый запрос — ищем и показываем меню
+    // Текстовый запрос
     try {
       if (!player) {
         player = await manager.create(msg.guildId, { leaveOnEnd: true });
@@ -351,8 +356,8 @@ client.on('messageCreate', async (msg) => {
       searchResults.set(msg.guildId, result.tracks);
 
       const listText = result.tracks.slice(0, 10).map((t, i) => {
-        const dur = t.duration ? ` \`Длина: ${Math.floor(t.duration / 60)}:${String(t.duration % 60).padStart(2, '0')}\`` : '';
-        return `**${i + 1}:** ${t.title}${dur}`;
+        const dur = formatDuration(t.duration);
+        return `**${i + 1}:** ${t.title} \`Длина: ${dur}\``;
       }).join('\n');
 
       const embed = new EmbedBuilder()
