@@ -1,4 +1,3 @@
-// === Прокси для Discord REST и WebSocket ===
 const PROXY_URL = 'http://127.0.0.1:3067';
 
 process.env.HTTP_PROXY = PROXY_URL;
@@ -14,7 +13,7 @@ bootstrap();
 const { setGlobalDispatcher, ProxyAgent } = require('undici');
 setGlobalDispatcher(new ProxyAgent(PROXY_URL));
 
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const { PlayerManager } = require('ziplayer');
 const { YouTubePlugin, SoundCloudPlugin, SpotifyPlugin } = require('@ziplayer/plugin');
 const { InfinityPlugin } = require('@ziplayer/infinity');
@@ -26,9 +25,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
-  rest: {
-    agent: new ProxyAgent(PROXY_URL),
-  },
+  rest: { agent: new ProxyAgent(PROXY_URL) },
 });
 
 const manager = new PlayerManager({
@@ -41,9 +38,11 @@ const manager = new PlayerManager({
 });
 
 const players = new Map();
+const currentTracks = new Map();
 
 manager.on('trackStart', (player, track) => {
   console.log(`[PLAY] ${track.title || track.url}`);
+  currentTracks.set(player.guildId, track);
 });
 manager.on('trackEnd', (player, track) => {
   console.log(`[END] ${track.title || track.url}`);
@@ -52,59 +51,83 @@ manager.on('playerError', (player, error) => {
   console.error('[PLAYER ERROR]', error?.message || error);
 });
 
+// Регистрация слэш-команд
+const commands = [
+  new SlashCommandBuilder()
+    .setName('info')
+    .setDescription('Показать информацию о текущем треке')
+    .toJSON(),
+];
+const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+(async () => {
+  try {
+    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
+    console.log('Слэш-команды зарегистрированы.');
+  } catch (e) {
+    console.error('Ошибка регистрации:', e);
+  }
+})();
+
 client.once('ready', () => {
   console.log(`Бот запущен как ${client.user.tag}`);
 });
 
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+  if (interaction.commandName === 'info') {
+    const player = players.get(interaction.guildId);
+    const track = currentTracks.get(interaction.guildId);
+    if (!player || !track) {
+      return interaction.reply('Сейчас ничего не играет.');
+    }
+    let progress = '';
+    try {
+      const bar = player.getProgressBar?.({ size: 20 });
+      if (bar) progress = `\n${bar}`;
+    } catch (e) {}
+    await interaction.reply(`🎵 **Сейчас играет:** ${track.title || track.url}${progress}`);
+  }
+});
+
 client.on('messageCreate', async (msg) => {
   if (msg.author.bot || !msg.guildId) return;
-
   let player = players.get(msg.guildId);
 
-  if (msg.content === '!ping') {
-    return msg.reply(`Pong! Задержка: ${client.ws.ping}ms`);
-  }
+  if (msg.content === '!ping') return msg.reply(`Pong! ${client.ws.ping}ms`);
 
   if (msg.content === '!stop') {
-    if (!player) return msg.reply('Бот ничего не играет.');
+    if (!player) return msg.reply('Ничего не играет.');
     player.stop();
     player.destroy();
     players.delete(msg.guildId);
-    return msg.reply('⏹ Остановлено, очередь очищена.');
+    currentTracks.delete(msg.guildId);
+    return msg.reply('⏹ Остановлено.');
   }
 
   if (msg.content === '!skip' || msg.content === '!next') {
-    if (!player) return msg.reply('Бот ничего не играет.');
-    try {
-      player.skip();
-      return msg.reply('⏭ Трек пропущен.');
-    } catch (e) {
-      return msg.reply('Нечего пропускать.');
-    }
+    if (!player) return msg.reply('Ничего не играет.');
+    try { player.skip(); return msg.reply('⏭ Пропущено.'); }
+    catch (e) { return msg.reply('Нечего пропускать.'); }
   }
 
   if (msg.content.startsWith('!play ')) {
     const voiceChannel = msg.member?.voice?.channel;
-    if (!voiceChannel) return msg.reply('Сначала зайди в голосовой канал.');
-
+    if (!voiceChannel) return msg.reply('Зайди в голосовой канал.');
     const query = msg.content.slice(6).trim();
     if (!query) return msg.reply('Укажи название или ссылку.');
-
     try {
       if (!player) {
         player = await manager.create(msg.guildId, { leaveOnEnd: true });
         players.set(msg.guildId, player);
       }
       if (!player.connection) await player.connect(voiceChannel);
-
       await player.play(query, msg.author.id);
-      msg.reply(`➕ Добавлено в очередь: **${query}**`);
+      msg.reply(`➕ Добавлено: **${query}**`);
     } catch (e) {
-      console.error('Ошибка:', e);
+      console.error(e);
       msg.reply('❌ Не удалось найти трек.');
     }
   }
 });
 
 client.login(process.env.DISCORD_TOKEN);
-EOF
