@@ -17,6 +17,7 @@ const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, Permission
 const { PlayerManager } = require('ziplayer');
 const { YouTubePlugin, SoundCloudPlugin, SpotifyPlugin } = require('@ziplayer/plugin');
 const { InfinityPlugin } = require('@ziplayer/infinity');
+const wtf = require('wtf_wikipedia'); // <-- ДОБАВЛЕНО
 
 const client = new Client({
   intents: [
@@ -52,19 +53,17 @@ manager.on('playerError', (player, error) => {
   console.error('[PLAYER ERROR]', error?.message || error);
 });
 
-// Регистрация guild-команд
+// Регистрация /info
 const commands = [
   new SlashCommandBuilder()
-    .setName('help')
-    .setDescription('Рассказать о боте и показать список команд')
+    .setName('info')
+    .setDescription('Показать информацию о текущем треке')
     .toJSON(),
 ];
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 (async () => {
   try {
-    // Очищаем глобальные команды (убираем дубли)
     await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: [] });
-    // Регистрируем guild-команду
     await rest.put(
       Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
       { body: commands }
@@ -88,20 +87,53 @@ function canControl(msg) {
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName === 'help') {
+  if (interaction.commandName === 'info') {
+    const player = players.get(interaction.guildId);
+    const track = currentTracks.get(interaction.guildId);
+    const requesterId = trackRequesters.get(interaction.guildId);
+
+    if (!player || !track) {
+      return interaction.reply('Сейчас ничего не играет.');
+    }
+
+    const title = track.title || 'Без названия';
+    const requester = requesterId ? `<@${requesterId}>` : 'Неизвестно';
+
+    // Сначала отвечаем, что ищем информацию (чтобы не было "Unknown interaction")
+    await interaction.deferReply();
+
+    let wikiText = 'Информация не найдена.';
+    try {
+      // Пытаемся найти страницу в русской Википедии по названию трека
+      const doc = await wtf.fetch(title, 'ru');
+      if (doc) {
+        // Берём первый абзац текста
+        const text = doc.text();
+        if (text && text.length > 10) {
+          // Обрезаем, если слишком длинно для Discord (лимит 4096)
+          wikiText = text.length > 1000 ? text.substring(0, 1000) + '...' : text;
+        }
+      }
+    } catch (e) {
+      console.error('Wikipedia fetch error:', e.message);
+    }
+
     const embed = new EmbedBuilder()
-      .setTitle('🎵 Дух Музыки — помощь')
-      .setDescription('Музыкальный бот для вашего сервера. Включает треки с YouTube, SoundCloud и Spotify.')
+      .setTitle('🎵 Информация о треке')
       .setColor(0x5865F2)
       .addFields(
-        { name: '▶️ !play <название или ссылка>', value: 'Добавить трек в очередь. Поддерживаются YouTube, SoundCloud, Spotify.' },
-        { name: '⏭ !skip / !next', value: 'Пропустить текущий трек. Доступно автору трека или админу.' },
-        { name: '⏹ !stop', value: 'Остановить воспроизведение и очистить очередь. Доступно автору трека или админу.' },
-        { name: '🏓 !ping', value: 'Проверить, что бот жив, и узнать задержку.' },
-        { name: 'ℹ️ /help', value: 'Показать это сообщение.' },
+        { name: 'Название', value: title, inline: false },
+        { name: 'Поставил', value: requester, inline: false },
+        { name: '📖 Из Wikipedia', value: wikiText, inline: false }
       )
       .setFooter({ text: 'Дух Музыки 🕊' });
-    await interaction.reply({ embeds: [embed] });
+
+    try {
+      const bar = player.getProgressBar?.({ size: 20 });
+      if (bar) embed.addFields({ name: 'Прогресс', value: bar, inline: false });
+    } catch (e) {}
+
+    await interaction.editReply({ embeds: [embed] });
   }
 });
 
