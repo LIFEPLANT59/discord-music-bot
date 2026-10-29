@@ -86,16 +86,14 @@ manager.on('trackStart', async (player, track) => {
   const guildId = player.guildId;
   const requesterId = trackRequesters.get(guildId);
   const embed = createTrackEmbed(track, requesterId, player);
-  const controlRow = createControlRow(player);
+  const controlRow = createControlRow(player); // Теперь возвращает массив [row1, row2]
 
   const oldMessage = playerMessages.get(guildId);
 
   if (oldMessage) {
     try {
-      // Пытаемся обновить старое сообщение
-      await oldMessage.edit({ embeds: [embed], components: [controlRow] });
+      await oldMessage.edit({ embeds: [embed], components: controlRow });
     } catch (e) {
-      // Если сообщение удалили, отправляем новое в тот же канал
       await sendNewControlMessage(guildId, player, embed, controlRow);
     }
   } else {
@@ -104,14 +102,14 @@ manager.on('trackStart', async (player, track) => {
 });
 
 // Функция отправки нового сообщения с панелью
-async function sendNewControlMessage(guildId, player, embed, row) {
+async function sendNewControlMessage(guildId, player, embed, components) {
   const channel = player.userdata?.channel;
   if (!channel) {
     console.log('Канал для отправки не найден!');
     return;
   }
   try {
-    const msg = await channel.send({ embeds: [embed], components: [row] });
+    const msg = await channel.send({ embeds: [embed], components });
     playerMessages.set(guildId, msg);
   } catch (e) {
     console.error('Не удалось отправить сообщение:', e);
@@ -159,17 +157,23 @@ function canControl(ctx) {
   return false;
 }
 
-// --- Панель кнопок (с перемоткой) ---
+// --- Панель кнопок (разбита на два ряда) ---
 function createControlRow(player) {
   const isPaused = player?.paused || false;
-  return new ActionRowBuilder().addComponents(
+
+  const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('ctrl_rewind').setLabel('⏪ -10s').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('ctrl_prev').setLabel('⏮️').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('ctrl_toggle').setLabel(isPaused ? '▶️' : '⏸️').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('ctrl_next').setLabel('⏭️').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('ctrl_forward').setLabel('⏩ +10s').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('ctrl_stop').setLabel('⏹️').setStyle(ButtonStyle.Danger),
   );
+
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('ctrl_stop').setLabel('⏹️ Остановить').setStyle(ButtonStyle.Danger),
+  );
+
+  return [row1, row2];
 }
 
 // --- Меню выбора трека ---
@@ -224,13 +228,12 @@ client.on('interactionCreate', async (interaction) => {
       trackRequesters.set(guildId, interaction.user.id);
       searchResults.delete(guildId);
 
-      // Превращаем сообщение с меню в панель управления
       const embed = createTrackEmbed(selectedTrack, interaction.user.id, player);
       const controlRow = createControlRow(player);
 
       await interaction.editReply({
         embeds: [embed],
-        components: [controlRow],
+        components: controlRow,
       });
 
       playerMessages.set(guildId, interaction.message);
@@ -311,7 +314,7 @@ client.on('interactionCreate', async (interaction) => {
     await interaction.deferUpdate().catch(() => {});
 
     try {
-      const currentTime = player.currentTime || 0; // Время в мс
+      const currentTime = player.currentTime || 0;
 
       switch (interaction.customId) {
         case 'ctrl_toggle':
@@ -324,10 +327,10 @@ client.on('interactionCreate', async (interaction) => {
           player.previous();
           break;
         case 'ctrl_rewind':
-          await player.seek(Math.max(0, currentTime - 10000)); // -10 сек
+          await player.seek(Math.max(0, currentTime - 10000));
           break;
         case 'ctrl_forward':
-          await player.seek(currentTime + 10000); // +10 сек
+          await player.seek(currentTime + 10000);
           break;
         case 'ctrl_stop':
           player.stop();
@@ -340,8 +343,8 @@ client.on('interactionCreate', async (interaction) => {
           await interaction.editReply({ content: '⏹ Остановлено.', components: [], embeds: [] }).catch(() => {});
           return;
       }
-      // Обновляем кнопки (например, меняем иконку паузы на плей)
-      await interaction.editReply({ components: [createControlRow(player)] }).catch(() => {});
+      // components: createControlRow(player) - передаем массив рядов напрямую
+      await interaction.editReply({ components: createControlRow(player) }).catch(() => {});
     } catch (e) {
       console.error('Button error:', e);
       await interaction.followUp({ content: 'Ошибка при выполнении.', ephemeral: true }).catch(() => {});
