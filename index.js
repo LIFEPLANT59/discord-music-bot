@@ -16,6 +16,7 @@ setGlobalDispatcher(new ProxyAgent(PROXY_URL));
 const {
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder,
   PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+  StringSelectMenuBuilder, StringSelectMenuOptionBuilder,
 } = require('discord.js');
 const { PlayerManager } = require('ziplayer');
 const { YouTubePlugin, SoundCloudPlugin, SpotifyPlugin } = require('@ziplayer/plugin');
@@ -44,7 +45,8 @@ const manager = new PlayerManager({
 const players = new Map();
 const currentTracks = new Map();
 const trackRequesters = new Map();
-const playerMessages = new Map(); // guildId -> Message с панелью
+const playerMessages = new Map();
+const searchResults = new Map(); // guildId -> массив треков для выбора
 
 manager.on('trackStart', (player, track) => {
   console.log(`[PLAY] ${track.title || track.url}`);
@@ -81,7 +83,6 @@ client.once('ready', () => {
   console.log(`Бот запущен как ${client.user.tag}`);
 });
 
-// --- Проверка прав ---
 function canControl(ctx) {
   const guildId = ctx.guildId;
   const userId = ctx.user ? ctx.user.id : ctx.author.id;
@@ -92,7 +93,7 @@ function canControl(ctx) {
   return false;
 }
 
-// --- Панель кнопок ---
+// --- Панель кнопок (как было) ---
 function createControlRow(player) {
   const isPaused = player?.paused || false;
   return new ActionRowBuilder().addComponents(
@@ -103,8 +104,62 @@ function createControlRow(player) {
   );
 }
 
+// --- Меню выбора трека ---
+function createSearchMenu(guildId, tracks) {
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`select_track_${guildId}`)
+    .setPlaceholder('Select track');
+
+  const options = tracks.slice(0, 25).map((track, index) => {
+    const label = `${index + 1}. ${track.title || 'Без названия'}`;
+    const description = track.duration
+      ? `Длина: ${Math.floor(track.duration / 60)}:${String(track.duration % 60).padStart(2, '0')}`
+      : undefined;
+    return new StringSelectMenuOptionBuilder()
+      .setLabel(label.substring(0, 100))
+      .setValue(String(index))
+      .setDescription(description ? description.substring(0, 100) : undefined);
+  });
+
+  menu.addOptions(options);
+  return new ActionRowBuilder().addComponents(menu);
+}
+
 // --- Обработка слэш-команд и кнопок ---
 client.on('interactionCreate', async (interaction) => {
+  // === Меню выбора трека ===
+  if (interaction.isStringSelectMenu()) {
+    const guildId = interaction.guildId;
+    if (interaction.customId !== `select_track_${guildId}`) return;
+
+    const player = players.get(guildId);
+    const tracks = searchResults.get(guildId);
+    if (!tracks) return interaction.reply({ content: 'Результаты поиска устарели.', ephemeral: true });
+
+    const index = parseInt(interaction.values[0]);
+    const selectedTrack = tracks[index];
+    if (!selectedTrack) return interaction.reply({ content: 'Трек не найден.', ephemeral: true });
+
+    try {
+      if (!player) return interaction.reply({ content: 'Бот не в голосовом канале.', ephemeral: true });
+      await player.play(selectedTrack.url, interaction.user.id);
+      trackRequesters.set(guildId, interaction.user.id);
+      searchResults.delete(guildId);
+
+      // Обновляем сообщение с выбором на панель управления
+      await interaction.update({
+        content: `▶️ **${selectedTrack.title}**`,
+        components: [createControlRow(player)],
+      });
+      playerMessages.set(guildId, interaction.message);
+    } catch (e) {
+      console.error('Select error:', e);
+      await interaction.reply({ content: 'Ошибка при запуске трека.', ephemeral: true });
+    }
+    return;
+  }
+
+  // === Слэш-команды ===
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === 'info') {
       const player = players.get(interaction.guildId);
@@ -151,7 +206,7 @@ client.on('interactionCreate', async (interaction) => {
         .setDescription('Музыкальный бот для вашего сервера.')
         .setColor(0x5865F2)
         .addFields(
-          { name: '▶️ !play <название/ссылка>', value: 'Добавить трек в очередь (YouTube, SoundCloud, Spotify).' },
+          { name: '▶️ !play <название/ссылка>', value: 'Найти трек и выбрать из списка (YouTube, SoundCloud, Spotify).' },
           { name: '⏭ !skip / !next', value: 'Пропустить текущий трек (автор или админ).' },
           { name: '⏹ !stop', value: 'Остановить и очистить очередь (автор или админ).' },
           { name: '🏓 !ping', value: 'Проверить задержку бота.' },
@@ -164,6 +219,7 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  // === Кнопки управления ===
   if (interaction.isButton()) {
     const player = players.get(interaction.guildId);
     if (!player) return interaction.reply({ content: 'Бот ничего не играет.', ephemeral: true });
@@ -190,6 +246,7 @@ client.on('interactionCreate', async (interaction) => {
           currentTracks.delete(interaction.guildId);
           trackRequesters.delete(interaction.guildId);
           playerMessages.delete(interaction.guildId);
+          searchResults.delete(interaction.guildId);
           await interaction.update({ content: '⏹ Остановлено.', components: [], embeds: [] });
           break;
       }
@@ -216,6 +273,7 @@ client.on('messageCreate', async (msg) => {
     currentTracks.delete(msg.guildId);
     trackRequesters.delete(msg.guildId);
     playerMessages.delete(msg.guildId);
+    searchResults.delete(msg.guildId);
     return msg.reply('⏹ Остановлено.');
   }
 
@@ -236,23 +294,69 @@ client.on('messageCreate', async (msg) => {
     const query = msg.content.slice(6).trim();
     if (!query) return msg.reply('Укажи название или ссылку.');
 
+    // Если это ссылка — запускаем сразу, без меню
+    if (query.startsWith('http://') || query.startsWith('https://')) {
+      try {
+        if (!player) {
+          player = await manager.create(msg.guildId, { leaveOnEnd: true });
+          players.set(msg.guildId, player);
+        }
+        if (!player.connection) await player.connect(voiceChannel);
+        await player.play(query, msg.author.id);
+        trackRequesters.set(msg.guildId, msg.author.id);
+
+        const controlMsg = await msg.reply({
+          content: `▶️ **${query}**`,
+          components: [createControlRow(player)],
+        });
+        playerMessages.set(msg.guildId, controlMsg);
+      } catch (e) {
+        console.error(e);
+        msg.reply('❌ Не удалось найти трек.');
+      }
+      return;
+    }
+
+    // Если это текстовый запрос — ищем и показываем меню
     try {
       if (!player) {
         player = await manager.create(msg.guildId, { leaveOnEnd: true });
         players.set(msg.guildId, player);
       }
       if (!player.connection) await player.connect(voiceChannel);
-      await player.play(query, msg.author.id);
-      trackRequesters.set(msg.guildId, msg.author.id);
 
-      const controlMsg = await msg.reply({
-        content: `▶️ **${query}**`,
-        components: [createControlRow(player)],
+      // Используем плагин YouTube для поиска (он умеет искать по тексту)
+      const youtubePlugin = manager.plugins.find(p => p.name === 'youtube');
+      if (!youtubePlugin) return msg.reply('Плагин для поиска не найден.');
+
+      const result = await youtubePlugin.search(query, msg.author.id);
+      if (!result || !result.tracks || result.tracks.length === 0) {
+        return msg.reply('❌ Ничего не найдено.');
+      }
+
+      searchResults.set(msg.guildId, result.tracks);
+
+      // Формируем список для Embed
+      const listText = result.tracks.slice(0, 10).map((t, i) => {
+        const dur = t.duration ? ` \`Длина: ${Math.floor(t.duration / 60)}:${String(t.duration % 60).padStart(2, '0')}\`` : '';
+        return `**${i + 1}:** ${t.title}${dur}`;
+      }).join('\n');
+
+      const embed = new EmbedBuilder()
+        .setTitle('⚠️ Выберите трек с помощью меню ниже:')
+        .setDescription(listText)
+        .setColor(0xFFA500)
+        .setFooter({ text: 'Выберите трек в выпадающем списке' });
+
+      const selectRow = createSearchMenu(msg.guildId, result.tracks);
+
+      await msg.reply({
+        embeds: [embed],
+        components: [selectRow],
       });
-      playerMessages.set(msg.guildId, controlMsg);
     } catch (e) {
       console.error(e);
-      msg.reply('❌ Не удалось найти трек.');
+      msg.reply('❌ Ошибка при поиске.');
     }
   }
 });
