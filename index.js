@@ -1,4 +1,3 @@
-cat > index.js << 'EOF'
 // === Прокси для Discord REST и WebSocket ===
 const PROXY_URL = 'http://127.0.0.1:3067';
 
