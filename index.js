@@ -27,7 +27,7 @@ const { InfinityPlugin } = require('@ziplayer/infinity');
 const wtf = require('wtf_wikipedia');
 
 const REQUIRED_VOICE_CHANNEL_NAME = '🎶→музыка';
-const REQUIRED_TEXT_CHANNEL_NAME = '🎸→заказ-музыки';
+const REQUIRED_TEXT_CHANNEL_NAME = '🌑┃🎸┃заказ-музыки'; // Обновлено название канала!
 const LOG_CHANNEL_NAME = '👮→moderator-logs';
 
 const client = new Client({
@@ -448,7 +448,7 @@ client.on('messageCreate', async (msg) => {
     if (!msg.content.startsWith('!')) return;
 
     const requiredChannel = msg.guild.channels.cache.find(c => c.name === REQUIRED_TEXT_CHANNEL_NAME && c.isTextBased());
-    const channelMention = requiredChannel ? `<#${requiredChannel.id}>` : '🎸→заказ-музыки';
+    const channelMention = requiredChannel ? `<#${requiredChannel.id}>` : '🌑┃🎸┃заказ-музыки';
     await sendWarning(`❌ Используйте канал ${channelMention} для заказа музыки.`);
     return;
   }
