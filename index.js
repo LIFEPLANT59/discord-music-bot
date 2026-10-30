@@ -26,8 +26,9 @@ const { YouTubePlugin, SoundCloudPlugin, SpotifyPlugin } = require('@ziplayer/pl
 const { InfinityPlugin } = require('@ziplayer/infinity');
 const wtf = require('wtf_wikipedia');
 
-const REQUIRED_VOICE_CHANNEL_NAME = '🎶→музыка';
-const REQUIRED_TEXT_CHANNEL_NAME = '🌑┃🎸┃заказ-музыки'; // Обновлено название канала!
+// === ID КАНАЛОВ ===
+const REQUIRED_VOICE_CHANNEL_ID = '1563615825364258896';
+const REQUIRED_TEXT_CHANNEL_ID = '1563307003739119739';
 const LOG_CHANNEL_NAME = '👮→moderator-logs';
 
 const client = new Client({
@@ -427,14 +428,11 @@ client.on('interactionCreate', async (interaction) => {
 client.on('messageCreate', async (msg) => {
   if (msg.author.bot || !msg.guildId) return;
   
-  // Вспомогательная функция для отправки предупреждений
-  // Сначала пробует ЛС. Если ЛС закрыты — пишет в канал и удаляет через 5 сек.
   async function sendWarning(content) {
     try {
       await msg.author.send({ content });
       logAction(msg.guild, 'Предупреждение в ЛС', msg.author, '', content);
     } catch (e) {
-      // ЛС закрыты, отправляем в канал
       const warningMsg = await msg.reply({ content }).catch(() => null);
       if (warningMsg) {
         setTimeout(() => { warningMsg.delete().catch(() => {}); }, 5000);
@@ -443,26 +441,22 @@ client.on('messageCreate', async (msg) => {
     }
   }
 
-  // 1. ПРОВЕРКА ТЕКСТОВОГО КАНАЛА
-  if (msg.channel.name !== REQUIRED_TEXT_CHANNEL_NAME) {
+  // 1. ПРОВЕРКА ТЕКСТОВОГО КАНАЛА ПО ID
+  if (msg.channel.id !== REQUIRED_TEXT_CHANNEL_ID) {
     if (!msg.content.startsWith('!')) return;
 
-    const requiredChannel = msg.guild.channels.cache.find(c => c.name === REQUIRED_TEXT_CHANNEL_NAME && c.isTextBased());
-    const channelMention = requiredChannel ? `<#${requiredChannel.id}>` : '🌑┃🎸┃заказ-музыки';
-    await sendWarning(`❌ Используйте канал ${channelMention} для заказа музыки.`);
+    await sendWarning(`❌ Используйте канал <#${REQUIRED_TEXT_CHANNEL_ID}> для заказа музыки.`);
     return;
   }
 
-  // 2. ПРОВЕРКА ГОЛОСОВОГО КАНАЛА
+  // 2. ПРОВЕРКА ГОЛОСОВОГО КАНАЛА ПО ID
   const voiceChannel = msg.member?.voice?.channel;
   if (!voiceChannel) {
-    await sendWarning('❌ Сначала зайдите в голосовой канал 🎶→музыка.');
+    await sendWarning(`❌ Сначала зайдите в голосовой канал <#${REQUIRED_VOICE_CHANNEL_ID}>.`);
     return;
   }
-  if (voiceChannel.name !== REQUIRED_VOICE_CHANNEL_NAME) {
-    const requiredChannel = msg.guild.channels.cache.find(c => c.name === REQUIRED_VOICE_CHANNEL_NAME && c.isVoice());
-    const channelMention = requiredChannel ? `<#${requiredChannel.id}>` : '🎶→музыка';
-    await sendWarning(`❌ Перейдите в голосовой канал ${channelMention} для прослушивания.`);
+  if (voiceChannel.id !== REQUIRED_VOICE_CHANNEL_ID) {
+    await sendWarning(`❌ Перейдите в голосовой канал <#${REQUIRED_VOICE_CHANNEL_ID}> для прослушивания.`);
     return;
   }
 
